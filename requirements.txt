@@ -1,0 +1,19 @@
+# --- Framework web ---
+fastapi
+uvicorn[standard]
+
+# --- Configuración y validación ---
+pydantic
+pydantic-settings
+
+# --- Subida de archivos (Form / UploadFile) ---
+python-multipart
+
+# --- Google Cloud Document AI ---
+google-cloud-documentai
+
+# --- Base de datos PostgreSQL (API keys) ---
+psycopg2-binary
+
+# --- Cliente HTTP para el script de prueba ---
+requests

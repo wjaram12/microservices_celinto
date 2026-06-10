@@ -1,0 +1,23 @@
+.venv/
+
+# Secretos / credenciales — NUNCA subir al repo
+.env
+credentials.json
+*.json.key
+*.pem
+
+# Caché de Python
+__pycache__/
+*.pyc
+
+# Logs del servidor
+*.log
+
+# Documentos de prueba (cédulas, títulos) — datos personales, no subir
+pruebas/
+cedula_prueba*
+*_prueba.*
+*_prueba_sintetica.*
+
+# Base de datos local de prompts del clasificador
+*.db
