@@ -16,6 +16,7 @@ import secrets
 from typing import Optional
 
 import psycopg2
+from psycopg2 import errors as pg_errors
 from psycopg2.extras import RealDictCursor
 
 from fastapi import Depends, Header, HTTPException, status
@@ -48,12 +49,30 @@ _DDL_API_KEYS = """
 _tabla_lista = False
 
 
+def _asegurar_tabla(con) -> None:
+    """
+    Crea la tabla si falta, TOLERANDO la carrera entre procesos.
+
+    `CREATE TABLE IF NOT EXISTS` no es del todo atómico: si varios workers
+    arrancan a la vez, todos ven que la tabla no existe y la intentan crear;
+    uno gana y los demás fallan con UniqueViolation sobre `pg_type`. En ese
+    caso la tabla YA existe, así que el error se ignora (era justo el objetivo).
+    """
+    try:
+        with con.cursor() as cur:
+            cur.execute(_DDL_API_KEYS)
+        con.commit()
+    except (pg_errors.UniqueViolation, pg_errors.DuplicateTable, pg_errors.DuplicateObject):
+        # Otro worker creó la tabla primero: no es un error real.
+        con.rollback()
+
+
 @contextlib.contextmanager
 def _conectar():
     """
     Abre una conexión a PostgreSQL, hace commit al salir bien (o rollback si
     hay error) y la cierra siempre. La primera vez en el proceso garantiza
-    que la tabla exista (idempotente).
+    que la tabla exista (idempotente y a prueba de carreras entre workers).
 
     Una conexión por operación: para el volumen de este servicio es suficiente
     y simple. Si en el futuro hay alta concurrencia, conviene un pool
@@ -63,9 +82,7 @@ def _conectar():
     con = psycopg2.connect(settings.DATABASE_URL)
     try:
         if not _tabla_lista:
-            with con.cursor() as cur:
-                cur.execute(_DDL_API_KEYS)
-            con.commit()
+            _asegurar_tabla(con)
             _tabla_lista = True
         yield con
         con.commit()
