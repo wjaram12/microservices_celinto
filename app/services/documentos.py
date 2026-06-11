@@ -118,9 +118,56 @@ def buscar_en_texto(texto: str, termino: str, margen: int = 40) -> dict:
 
 # --- Helpers de cédula ---
 
-def normalizar_cedula(valor: Optional[str]) -> str:
-    """Deja solo los dígitos: quita espacios, guiones, puntos, etc."""
-    return re.sub(r"\D", "", valor or "")
+def normalizar_cedula(valor) -> str:
+    """
+    Normaliza un número de identificación a solo dígitos: quita espacios,
+    guiones, puntos, etc. Tolera que el extractor devuelva el valor como
+    número (int/float) en vez de texto.
+    """
+    if valor is None:
+        return ""
+    if isinstance(valor, float) and valor.is_integer():
+        valor = int(valor)  # 1710034065.0 -> 1710034065 (sin el ".0")
+    return re.sub(r"\D", "", str(valor))
+
+
+def normalizar_identificacion(valor) -> str:
+    """
+    Normaliza una identificación a MAYÚSCULAS y solo letras/dígitos (los
+    números de pasaporte son alfanuméricos). Tolera valores numéricos.
+    """
+    if valor is None:
+        return ""
+    if isinstance(valor, float) and valor.is_integer():
+        valor = int(valor)
+    return re.sub(r"[^A-Z0-9]", "", str(valor).upper())
+
+
+# Claves bajo las que puede venir el número de identificación en los campos
+# extraídos, según la clase del documento y cómo se haya nombrado en el esquema
+# del extractor (el del builder, uno importado o un procesador publicado).
+_CLAVES_NUMERO = (
+    "numero_cedula", "numero_identificacion", "numero_documento",
+    "cedula", "identificacion", "numero",
+)
+_CLAVES_PASAPORTE = (
+    "numero_pasaporte", "pasaporte", "numero_documento",
+    "numero_identificacion", "numero",
+)
+
+
+def valor_en_datos(datos: dict, claves: tuple):
+    """Primer valor presente en los campos extraídos bajo alguna de las claves."""
+    for clave in claves:
+        if (datos or {}).get(clave) is not None:
+            return datos[clave]
+    return None
+
+
+def numero_en_datos(datos: dict) -> str:
+    """Número de cédula entre los campos extraídos, normalizado a solo dígitos
+    ('' si no aparece bajo ninguna clave conocida)."""
+    return normalizar_cedula(valor_en_datos(datos, _CLAVES_NUMERO))
 
 
 def cedula_es_valida(numero: str) -> bool:
@@ -239,7 +286,9 @@ class ServicioDocumentos:
     ) -> dict:
         """
         Clasifica el documento, extrae sus campos (cédula o pasaporte) y, si se
-        envía `cedula_sistema`, compara el número contra el extraído.
+        envía `cedula_sistema`, compara el número contra el extraído SEGÚN LA
+        CLASE detectada: cédula (solo dígitos + verificador) o pasaporte
+        (alfanumérico en mayúsculas).
 
         Esta ruta usa SOLO dos procesadores: el clasificador y el extractor.
         No usa OCR/parse: el número del documento sale de la extracción
@@ -247,20 +296,29 @@ class ServicioDocumentos:
         deprecado y siempre es null.)
         """
         # Validación local del dato del sistema (gratis e instantánea) antes de
-        # gastar llamadas a Extend.
+        # gastar llamadas a Extend. El número puede ser de cédula (solo dígitos)
+        # o de pasaporte (alfanumérico); la comparación depende de la clase que
+        # detecte el clasificador.
         id_sistema = None
         if cedula_sistema and cedula_sistema.strip():
-            id_sistema = normalizar_cedula(cedula_sistema)
-            if len(id_sistema) != LONGITUD_CEDULA:
+            id_sistema = normalizar_identificacion(cedula_sistema)
+            if id_sistema.isdigit():
+                # Solo dígitos => se espera una cédula ecuatoriana: fail-fast.
+                if len(id_sistema) != LONGITUD_CEDULA:
+                    raise ErrorDeValidacion(
+                        f"La cédula del sistema debe tener {LONGITUD_CEDULA} dígitos; "
+                        f"se recibió '{cedula_sistema}' ({len(id_sistema)} dígitos). "
+                        "¿Se perdió un cero a la izquierda?"
+                    )
+                if not cedula_es_valida(id_sistema):
+                    raise ErrorDeValidacion(
+                        f"La cédula del sistema '{cedula_sistema}' no es un número de "
+                        "cédula ecuatoriana válido (falla el dígito verificador)."
+                    )
+            elif len(id_sistema) < 5:
                 raise ErrorDeValidacion(
-                    f"La cédula del sistema debe tener {LONGITUD_CEDULA} dígitos; "
-                    f"se recibió '{cedula_sistema}' ({len(id_sistema)} dígitos). "
-                    "¿Se perdió un cero a la izquierda?"
-                )
-            if not cedula_es_valida(id_sistema):
-                raise ErrorDeValidacion(
-                    f"La cédula del sistema '{cedula_sistema}' no es un número de "
-                    "cédula ecuatoriana válido (falla el dígito verificador)."
+                    f"La identificación del sistema '{cedula_sistema}' es demasiado "
+                    "corta para ser una cédula o un número de pasaporte."
                 )
 
         preprocesar(contenido, mime_type)
@@ -291,10 +349,18 @@ class ServicioDocumentos:
         if id_sistema is not None:
             resultado["identificacion_sistema"] = cedula_sistema
 
-            if es_cedula:
-                # El número leído sale de la extracción estructurada (/extract).
-                id_documento = normalizar_cedula(datos.get("numero_cedula"))
-                id_documento = id_documento if cedula_es_valida(id_documento) else None
+            if es_identidad:
+                # El número leído sale de la extracción estructurada (/extract) y
+                # se compara NORMALIZADO en ambos lados, según la clase detectada.
+                if clase == CLASE_CEDULA:
+                    # Cédula: solo dígitos + dígito verificador.
+                    id_documento = numero_en_datos(datos)
+                    id_documento = id_documento if cedula_es_valida(id_documento) else None
+                else:
+                    # Pasaporte: alfanumérico en MAYÚSCULAS (sin guiones/espacios).
+                    id_documento = normalizar_identificacion(
+                        valor_en_datos(datos, _CLAVES_PASAPORTE)
+                    ) or None
                 resultado["identificacion_documento"] = id_documento
                 resultado["coincide"] = bool(id_documento) and id_sistema == id_documento
             else:

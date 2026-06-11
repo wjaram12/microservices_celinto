@@ -1,0 +1,28 @@
+# Servicio systemd del clasificador documental (gunicorn + worker ASGI de uvicorn).
+# Instalación: deploy/README.md
+#
+# Claves de esta configuración:
+#   -k uvicorn.workers.UvicornWorker  FastAPI es ASGI; gunicorn a secas (WSGI) no lo sirve.
+#   --bind 127.0.0.1:8000             SOLO localhost: el único acceso público es nginx (TLS).
+#   --timeout 330                     Extend puede tardar hasta 5 min; no matar al worker antes.
+#   Restart=always                    se relevanta solo si un worker muere.
+
+[Unit]
+Description=Clasificador documental (FastAPI / gunicorn)
+After=network.target postgresql.service
+
+[Service]
+User=wjaram
+WorkingDirectory=/home/wjaram/microservices_celinto
+ExecStart=/home/wjaram/microservices_celinto/venv/bin/gunicorn app.main:app \
+    -k uvicorn.workers.UvicornWorker \
+    -w 4 \
+    --bind 127.0.0.1:8000 \
+    --timeout 330 \
+    --access-logfile - \
+    --error-logfile -
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

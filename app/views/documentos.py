@@ -134,9 +134,10 @@ async def validar_documento(
     cedula_sistema: Optional[str] = Form(
         None,
         description=(
-            "Opcional. Si se envía, se compara contra el número de cédula "
-            "extraído del documento (extracción estructurada). Si se omite, "
-            "solo se valida que el documento sea una cédula y se extraen sus datos."
+            "Opcional. Número de identificación del sistema: cédula (10 dígitos) "
+            "o pasaporte (alfanumérico). Si se envía, se compara contra el número "
+            "extraído del documento según su clase (cédula o pasaporte). Si se "
+            "omite, solo se valida el documento y se extraen sus datos."
         ),
     ),
 ):
@@ -159,11 +160,6 @@ async def validar_documento(
     elif resultado["identificacion_sistema"] is None:
         # Modo simple: documento de identidad reconocido, datos extraídos.
         mensaje = f"Documento reconocido como {clase}; datos extraídos."
-    elif not resultado["es_cedula"]:
-        mensaje = (
-            "Se envió un número de cédula, pero el documento no es una cédula; "
-            "no se comparó el número."
-        )
     elif resultado["identificacion_documento"] is None:
         mensaje = "No se pudo extraer un número de identificación del documento."
     elif resultado["coincide"]:

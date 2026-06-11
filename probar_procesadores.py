@@ -238,6 +238,12 @@ import httpx
 
 CAPTURAS = {"/classify": [], "/extract": [], "/parse": [], "/files/upload": []}
 
+# Respuestas configurables del mock (las fases las cambian para simular clases
+# distintas). El número de cédula viene "sucio" a propósito (guiones, puntos y
+# espacios): la comparación de validar-identidad debe normalizarlo.
+MOCK_CLASIFICACION = {"type": "CEDULA", "confidence": 0.95}
+MOCK_EXTRACCION = {"numero_cedula": " 171-003.4065 ", "apellidos": "PEREZ", "nombres": "JUAN"}
+
 
 def reiniciar_capturas():
     for k in CAPTURAS:
@@ -285,14 +291,12 @@ class FakeClient:
         if ruta == "/files/upload":
             return FakeResp({"id": "file_abc"})
         if ruta == "/classify":
-            return FakeResp({"status": "PROCESSED",
-                             "output": {"type": "CEDULA", "confidence": 0.95}})
+            return FakeResp({"status": "PROCESSED", "output": dict(MOCK_CLASIFICACION)})
         if ruta == "/parse":
             return FakeResp({"status": "PROCESSED",
                              "output": {"chunks": [{"content": "REPUBLICA 1710034065 GUAYAS"}]}})
         if ruta == "/extract":
-            return FakeResp({"status": "PROCESSED", "output": {"value": {
-                "numero_cedula": "1710034065", "apellidos": "PEREZ", "nombres": "JUAN"}}})
+            return FakeResp({"status": "PROCESSED", "output": {"value": dict(MOCK_EXTRACCION)}})
         return FakeResp({}, 404)
 
 
@@ -353,6 +357,16 @@ check("extraer usa config.schema",
 # validar-identidad usa SOLO clasificador + extractor: nunca llama al OCR.
 check("validar-identidad NO llama a /parse (sin OCR)", len(CAPTURAS["/parse"]) == 0)
 check("el campo ocr de la respuesta queda null (deprecado)", r.json().get("ocr") is None)
+
+# La comparación normaliza AMBOS lados: el extractor devolvió ' 171-003.4065 '
+# y la cédula del sistema fue '1710034065' -> deben coincidir.
+check("compara el número NORMALIZADO (guiones/espacios fuera) -> coincide",
+      r.json().get("match_document") is True, r.text[:300])
+from app.services.documentos import normalizar_cedula, numero_en_datos  # noqa: E402
+check("normalizar_cedula tolera int", normalizar_cedula(1710034065) == "1710034065")
+check("normalizar_cedula tolera float", normalizar_cedula(1710034065.0) == "1710034065")
+check("numero_en_datos encuentra claves alternativas",
+      numero_en_datos({"numero_identificacion": "171.0034065"}) == "1710034065")
 # El parse (OCR) es de la ruta /ocr.
 cliente.post("/api/v1/ocr/", files=ARCHIVO, headers=H)
 b_par = CAPTURAS["/parse"][-1]
@@ -613,6 +627,38 @@ cliente.put(f"/api/v1/procesadores/{id_rc}",
             json={"esquema": None, "modo": "inline", "procesador_id": None}, headers=A)
 cliente.put(f"/api/v1/procesadores/{id_ext}",
             json={"modo": "inline", "procesador_id": None}, headers=A)
+
+
+# ================== FASE 10: comparación según la clase (cédula o PASAPORTE) ==================
+print("\n=== Fase 10: validar-identidad compara según la clase detectada ===")
+MOCK_CLASIFICACION.update({"type": "PASAPORTE", "confidence": 0.97})
+MOCK_EXTRACCION.clear()
+MOCK_EXTRACCION.update({"numero_pasaporte": " a123-4567 ", "apellidos": "PEREZ"})
+
+r = cliente.post("/api/v1/validaciones/validar-identidad/", files=ARCHIVO,
+                 data={"cedula_sistema": "A1234567"}, headers=H)
+check("pasaporte + número del sistema -> 200", r.status_code == 200, r.text[:300])
+d = r.json() if r.status_code == 200 else {}
+check("pasaporte es identidad (result True)", d.get("result") is True)
+check("compara alfanumérico normalizado -> coincide",
+      d.get("match_document") is True, r.text[:300])
+
+r = cliente.post("/api/v1/validaciones/validar-identidad/", files=ARCHIVO,
+                 data={"cedula_sistema": "B9999999"}, headers=H)
+check("pasaporte con número distinto -> NO coincide",
+      r.status_code == 200 and r.json().get("match_document") is False)
+
+check("identificación demasiado corta -> 400",
+      cliente.post("/api/v1/validaciones/validar-identidad/", files=ARCHIVO,
+                   data={"cedula_sistema": "AB1"}, headers=H).status_code == 400)
+check("cédula numérica inválida sigue dando 400 (fail-fast)",
+      cliente.post("/api/v1/validaciones/validar-identidad/", files=ARCHIVO,
+                   data={"cedula_sistema": "1234567890"}, headers=H).status_code == 400)
+
+# Restaurar el mock para no contaminar otras corridas.
+MOCK_CLASIFICACION.update({"type": "CEDULA", "confidence": 0.95})
+MOCK_EXTRACCION.clear()
+MOCK_EXTRACCION.update({"numero_cedula": " 171-003.4065 ", "apellidos": "PEREZ", "nombres": "JUAN"})
 
 
 print("\n" + ("=" * 50))
