@@ -1,0 +1,155 @@
+{% extends "base.html" %}
+{% block titulo %}Rutas · Administración{% endblock %}
+{% block titulo_pagina %}🔗 Rutas{% endblock %}
+{% block subtitulo %}Catálogo de rutas (URLs) de la API; los procesadores se asocian a estas rutas.{% endblock %}
+
+{% block contenido %}
+<div class="toolbar">
+  <input type="text" id="r-buscar" placeholder="Buscar ruta…" oninput="filtrarTabla('r-buscar','r-cuerpo')">
+  <button class="btn-principal" onclick="abrirCrearRuta()">➕ Nueva ruta</button>
+</div>
+
+<div class="tabla-envoltura">
+  <table class="tabla">
+    <thead>
+      <tr>
+        <th>Clave</th><th>URL (endpoint)</th><th>Descripción</th><th>Estado</th>
+        <th>Editada</th><th class="celda-acciones">Acciones</th>
+      </tr>
+    </thead>
+    <tbody id="r-cuerpo"></tbody>
+  </table>
+</div>
+
+<!-- Modal: crear / editar ruta -->
+<div class="modal-fondo" id="modal-ruta">
+  <div class="modal">
+    <h3 id="mr-titulo">Nueva ruta</h3>
+    <p class="modal-sub">
+      ⚠️ Registrar una ruta NO crea el endpoint (los endpoints viven en el código).
+      Este catálogo define a qué rutas se les pueden asociar procesadores.
+    </p>
+    <label for="mr-clave">Clave (identificador lógico)</label>
+    <input type="text" id="mr-clave" placeholder="ej: verificar-titulo">
+    <label for="mr-url">URL (endpoint del servicio)</label>
+    <input type="text" id="mr-url" placeholder="ej: /api/v1/titulos/verificar/">
+    <label for="mr-desc">Descripción</label>
+    <textarea id="mr-desc" placeholder="Qué hace esta ruta..."></textarea>
+    <div class="modal-acciones">
+      <button class="btn-texto" onclick="cerrarModal('modal-ruta')">Cancelar</button>
+      <button class="btn-principal" onclick="guardarRuta()">💾 Guardar</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block js %}
+<script>
+const API_RUTAS = "/api/v1/rutas/";
+let RUTAS_FILAS = {};       // clave -> fila
+let rutaEnEdicion = null;   // null = creando
+
+// Valida la clave y carga la tabla. Devuelve true si todo fue bien.
+async function cargarDatos() {
+  const { status, ok, cuerpo } = await llamar(API_RUTAS);
+  if (ok) { renderizarRutas(cuerpo); return true; }
+  if (status === 401 || status === 403) {
+    avisar("Clave inválida o sin permisos de administrador.", true);
+  } else {
+    avisar((cuerpo && cuerpo.detail) || `No se pudieron cargar las rutas (HTTP ${status}).`, true);
+  }
+  return false;
+}
+
+function renderizarRutas(items) {
+  RUTAS_FILAS = {};
+  const $cuerpo = $("#r-cuerpo");
+  if (!items.length) {
+    $cuerpo.html('<tr><td colspan="6" class="sin-datos">No hay rutas registradas.</td></tr>');
+    return;
+  }
+  $cuerpo.html(items.map(r => {
+    RUTAS_FILAS[r.clave] = r;
+    return `
+    <tr class="${r.activo ? "" : "inactivo"}">
+      <td><b>${escapar(r.clave)}</b></td>
+      <td><span class="etiqueta tipo">${escapar(r.url)}</span></td>
+      <td>${escapar(r.descripcion || "—")}</td>
+      <td><span class="etiqueta ${r.activo ? "activo" : "revocado"}">${r.activo ? "ACTIVA" : "INACTIVA"}</span></td>
+      <td>${escapar(r.actualizado_en)}</td>
+      <td class="celda-acciones">
+        <button class="btn-icono" onclick="abrirEditarRuta('${escapar(r.clave)}')">✏️ Editar</button>
+        <button class="btn-icono" onclick="alternarRuta('${escapar(r.clave)}', ${r.activo ? "false" : "true"})">
+          ${r.activo ? "⏸️ Desactivar" : "▶️ Activar"}
+        </button>
+        <button class="btn-icono peligro" onclick="eliminarRuta('${escapar(r.clave)}')">🗑️</button>
+      </td>
+    </tr>`;
+  }).join(""));
+  filtrarTabla("r-buscar", "r-cuerpo");
+}
+
+// --- Crear / editar (mismo modal) ---
+function abrirCrearRuta() {
+  rutaEnEdicion = null;
+  $("#mr-titulo").text("Nueva ruta");
+  $("#mr-clave").val("").prop("disabled", false);
+  $("#mr-url, #mr-desc").val("");
+  abrirModal("modal-ruta");
+}
+
+function abrirEditarRuta(clave) {
+  const r = RUTAS_FILAS[clave];
+  if (!r) return;
+  rutaEnEdicion = clave;
+  $("#mr-titulo").text(`Editar ruta '${clave}'`);
+  // La clave es inmutable: es lo que referencian los procesadores.
+  $("#mr-clave").val(r.clave).prop("disabled", true);
+  $("#mr-url").val(r.url);
+  $("#mr-desc").val(r.descripcion);
+  abrirModal("modal-ruta");
+}
+
+async function guardarRuta() {
+  const url = $("#mr-url").val().trim();
+  const descripcion = $("#mr-desc").val().trim();
+  let resp;
+  if (rutaEnEdicion === null) {
+    const clave = $("#mr-clave").val().trim();
+    if (!clave || !url) { avisar("Completa la clave y la URL de la ruta.", true); return; }
+    resp = await llamar(API_RUTAS, { method: "POST", body: JSON.stringify({ clave, url, descripcion }) });
+  } else {
+    if (!url) { avisar("La URL no puede quedar vacía.", true); return; }
+    resp = await llamar(API_RUTAS + encodeURIComponent(rutaEnEdicion), {
+      method: "PUT", body: JSON.stringify({ url, descripcion }),
+    });
+  }
+  const { status, ok, cuerpo } = resp;
+  if (ok) {
+    cerrarModal("modal-ruta");
+    avisar(rutaEnEdicion === null ? "Ruta creada. Ya puedes asociarle procesadores." : "Ruta actualizada.");
+    cargarDatos();
+    return;
+  }
+  if (sesionInvalida(status)) return;
+  avisar((cuerpo && cuerpo.detail) || `No se pudo guardar (HTTP ${status}).`, true);
+}
+
+async function alternarRuta(clave, activar) {
+  const { status, ok, cuerpo } = await llamar(API_RUTAS + encodeURIComponent(clave), {
+    method: "PUT", body: JSON.stringify({ activo: activar === true || activar === "true" }),
+  });
+  if (ok) { cargarDatos(); return; }
+  if (sesionInvalida(status)) return;
+  avisar((cuerpo && cuerpo.detail) || `No se pudo cambiar el estado (HTTP ${status}).`, true);
+}
+
+async function eliminarRuta(clave) {
+  if (!confirm(`¿Eliminar la ruta '${clave}'? Si tiene procesadores asociados, el servidor lo impedirá.`)) return;
+  const { status, ok, cuerpo } = await llamar(API_RUTAS + encodeURIComponent(clave), { method: "DELETE" });
+  if (ok) { avisar(`Ruta '${clave}' eliminada.`); cargarDatos(); return; }
+  if (sesionInvalida(status)) return;
+  avisar((cuerpo && cuerpo.detail) || `No se pudo eliminar (HTTP ${status}).`, true);
+}
+</script>
+{% endblock %}

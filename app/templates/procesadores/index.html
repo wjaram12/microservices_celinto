@@ -1,0 +1,702 @@
+{% extends "base.html" %}
+{% block titulo %}Procesadores · Administración{% endblock %}
+{% block titulo_pagina %}🧩 Procesadores{% endblock %}
+{% block subtitulo %}Procesadores de Extend por ruta: clasificadores, extractores, esquemas y umbrales.{% endblock %}
+
+{% block contenido %}
+<div class="toolbar">
+  <input type="text" id="p-buscar" placeholder="Buscar por ruta, operación, clase…" oninput="filtrarTabla('p-buscar','p-cuerpo')">
+  <button class="btn-principal" onclick="abrirCrearProc()">➕ Nuevo procesador</button>
+</div>
+
+<div class="tabla-envoltura">
+  <table class="tabla">
+    <thead>
+      <tr>
+        <th>Ruta</th><th>Operación</th><th>Clase</th><th>Modo</th>
+        <th>Procesador</th><th>Umbral</th><th>Estado</th>
+        <th class="celda-acciones">Acciones</th>
+      </tr>
+    </thead>
+    <tbody id="p-cuerpo"></tbody>
+  </table>
+</div>
+
+<!-- Modal: crear / editar procesador -->
+<div class="modal-fondo" id="modal-proc">
+  <div class="modal ancha">
+    <h3 id="mp-titulo">Nuevo procesador</h3>
+    <p class="modal-sub">Une una ruta del catálogo con su procesador de Extend (publicado o inline).</p>
+    <div class="fila">
+      <div>
+        <label for="pr-ruta">Ruta (catálogo de Rutas)</label>
+        <select id="pr-ruta"></select>
+      </div>
+      <div>
+        <label for="pr-operacion">Operación</label>
+        <select id="pr-operacion">
+          <option value="clasificar">clasificar</option>
+          <option value="extraer">extraer</option>
+          <option value="parse">parse (OCR)</option>
+        </select>
+      </div>
+      <div>
+        <label for="pr-clase">Clase (solo extraer)</label>
+        <input type="text" id="pr-clase" placeholder="CEDULA, PASAPORTE…">
+      </div>
+      <div>
+        <label for="pr-modo">Modo</label>
+        <select id="pr-modo">
+          <option value="inline">inline (config / esquema aquí)</option>
+          <option value="id">id (publicado en Extend)</option>
+        </select>
+      </div>
+    </div>
+
+    <label for="pr-pid">Procesador publicado (solo modo id: cl_… / ex_…)</label>
+    <input type="text" id="pr-pid" placeholder="cl_… para clasificar, ex_… para extraer">
+    <div class="acciones">
+      <button class="btn-suave" type="button"
+              onclick="cargarExtend($('#pr-operacion').val(),'pr-extend','pr-version','pr-pid')">
+        ⤓ Cargar procesadores de Extend
+      </button>
+    </div>
+    <div class="fila">
+      <div>
+        <label for="pr-extend">Procesador de Extend (sincronizado)</label>
+        <select id="pr-extend" onchange="elegirExtend('pr-extend','pr-version','pr-pid')"><option value="">—</option></select>
+      </div>
+      <div>
+        <label for="pr-version">Versión a ejecutar</label>
+        <select id="pr-version">
+          <option value="">última publicada</option>
+          <option value="draft">borrador (draft — cambios sin publicar)</option>
+        </select>
+      </div>
+    </div>
+    <label style="display:flex;align-items:center;gap:8px;font-weight:400;margin-top:12px">
+      <input type="checkbox" id="pr-sync" checked style="width:auto">
+      ⬆ Al guardar, actualizar también este esquema en Extend
+      <span class="meta" style="margin:0">(versión borrador del procesador publicado)</span>
+    </label>
+    <label style="display:flex;align-items:center;gap:8px;font-weight:400;margin-top:6px">
+      <input type="checkbox" id="pr-publicar" style="width:auto">
+      🚀 …y publicar la versión automáticamente (release minor)
+      <span class="meta" style="margin:0">(⚠ las rutas en "última publicada" usarán el cambio de inmediato)</span>
+    </label>
+
+    <label for="pr-umbral">Umbral de confianza (solo clasificar: 0–1, ej. 0.85)</label>
+    <input type="text" id="pr-umbral" placeholder="vacío = 0.85 por defecto">
+
+    <!-- Builder de clasificaciones (solo operación 'clasificar' en modo inline):
+         las clases que el modelo puede devolver, con la descripción que lo guía. -->
+    <div id="clasif-seccion">
+      <label>Schema builder — clasificaciones de este clasificador</label>
+      <p class="modal-sub">
+        Define cada clase con su clave, etiqueta y descripción (el prompt que guía al
+        modelo). Si lo dejas vacío, esta ruta usa los prompts globales. La clase de
+        descarte 'other' se añade sola si no la defines.
+      </p>
+      <div class="tabla-envoltura">
+        <table class="tabla">
+          <thead>
+            <tr><th>Clave (id)</th><th>Etiqueta (type)</th><th>Descripción (prompt que guía al modelo)</th><th></th></tr>
+          </thead>
+          <tbody id="cb-cuerpo"></tbody>
+        </table>
+      </div>
+      <div class="acciones">
+        <button class="btn-suave" type="button" onclick="agregarClasif()">➕ Añadir clasificación</button>
+        <button class="btn-suave" type="button" onclick="importarClasifs('pr-pid','pr-version')">⤓ Importar de Extend</button>
+        <button class="btn-suave" type="button" onclick="exportarJson(construirClasifs, 'clasificaciones')">⬇ Exportar JSON</button>
+        <button class="btn-texto" type="button" onclick="alternarJsonClasif()">{ } Ver JSON</button>
+      </div>
+      <pre id="cb-json" class="oculto"
+           style="background:var(--md-surface-container);border-radius:var(--md-radio-s);padding:12px;font-size:.78rem;overflow:auto"></pre>
+    </div>
+
+    <!-- Schema builder (solo operación 'extraer'): define las propiedades del
+         esquema con clave, tipo y descripción; el JSON Schema se genera solo. -->
+    <div id="sb-seccion">
+      <label>Schema builder — campos que extrae este procesador</label>
+      <p class="modal-sub">
+        Añade propiedades y configura su clave, tipo y descripción. La descripción
+        le dice al modelo cómo reconocer el campo en el documento.
+      </p>
+      <div class="tabla-envoltura">
+        <table class="tabla">
+          <thead>
+            <tr><th>Clave</th><th>Tipo</th><th>Descripción (guía al modelo)</th><th></th></tr>
+          </thead>
+          <tbody id="sb-cuerpo"></tbody>
+        </table>
+      </div>
+      <div class="acciones">
+        <button class="btn-suave" type="button" onclick="agregarCampo()">➕ Añadir campo</button>
+        <button class="btn-suave" type="button" onclick="importarEsquema('pr-pid','pr-version')">⤓ Importar de Extend</button>
+        <button class="btn-suave" type="button" onclick="exportarJson(construirEsquema, 'esquema-extraccion')">⬇ Exportar JSON</button>
+        <button class="btn-texto" type="button" onclick="alternarJson()">{ } Ver JSON</button>
+      </div>
+      <pre id="sb-json" class="oculto"
+           style="background:var(--md-surface-container);border-radius:var(--md-radio-s);padding:12px;font-size:.78rem;overflow:auto"></pre>
+    </div>
+
+    <!-- Opciones de parse (solo operación 'parse'/OCR). -->
+    <div id="parse-seccion">
+      <label for="pr-target">Formato de salida del OCR (target)</label>
+      <select id="pr-target">
+        <option value="markdown">markdown</option>
+        <option value="text">text</option>
+      </select>
+    </div>
+
+    <div class="modal-acciones">
+      <button class="btn-texto" onclick="cerrarModal('modal-proc')">Cancelar</button>
+      <button class="btn-principal" onclick="guardarProc()">💾 Guardar</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block js %}
+<script>
+const API_PROCESADORES = "/api/v1/procesadores/";
+const API_RUTAS = "/api/v1/rutas/";
+
+let RUTAS = {};          // clave -> url (catálogo)
+let PROCS = {};          // id -> fila
+let procEnEdicion = null; // null = creando
+
+// Valida la clave, carga el catálogo de rutas y la tabla. Devuelve true si todo fue bien.
+async function cargarDatos() {
+  const { status, ok, cuerpo } = await llamar(API_PROCESADORES);
+  if (!ok) {
+    if (status === 401 || status === 403) {
+      avisar("Clave inválida o sin permisos de administrador.", true);
+    } else {
+      avisar((cuerpo && cuerpo.detail) || `No se pudieron cargar los procesadores (HTTP ${status}).`, true);
+    }
+    return false;
+  }
+  // El catálogo de rutas alimenta el select del modal y la columna Ruta.
+  const rs = await llamar(API_RUTAS + "?solo_activos=true");
+  RUTAS = {};
+  if (rs.ok) {
+    rs.cuerpo.forEach(r => { RUTAS[r.clave] = r.url; });
+    $("#pr-ruta").html(rs.cuerpo.map(r =>
+      `<option value="${escapar(r.clave)}">${escapar(r.clave)} — ${escapar(r.url)}</option>`).join(""));
+  }
+  renderizarProcs(cuerpo);
+  return true;
+}
+
+function renderizarProcs(items) {
+  PROCS = {};
+  const $cuerpo = $("#p-cuerpo");
+  if (!items.length) {
+    $cuerpo.html('<tr><td colspan="8" class="sin-datos">No hay procesadores registrados.</td></tr>');
+    return;
+  }
+  $cuerpo.html(items.map(p => {
+    PROCS[p.id] = p;
+    const procesador = p.modo === "id"
+      ? `${escapar(p.procesador_id || "—")}${p.version ? ` <span class="sub">versión ${escapar(p.version)}</span>` : ` <span class="sub">última versión</span>`}`
+      : `<span class="sub">config inline${p.operacion === "extraer" ? " (esquema)" : ""}</span>`;
+    return `
+    <tr class="${p.activo ? "" : "inactivo"}">
+      <td><b>${escapar(p.ruta)}</b><span class="sub">${escapar(RUTAS[p.ruta] || "")}</span></td>
+      <td>${escapar(p.operacion)}</td>
+      <td>${p.clase ? escapar(p.clase) : "—"}</td>
+      <td><span class="etiqueta tipo">${escapar(p.modo)}</span></td>
+      <td>${procesador}</td>
+      <td>${p.umbral ?? "—"}</td>
+      <td><span class="etiqueta ${p.activo ? "activo" : "revocado"}">${p.activo ? "ACTIVO" : "INACTIVO"}</span></td>
+      <td class="celda-acciones">
+        <button class="btn-icono" onclick="abrirEditarProc(${p.id})">✏️ Editar</button>
+        <button class="btn-icono" onclick="alternarProc(${p.id}, ${p.activo ? "false" : "true"})">
+          ${p.activo ? "⏸️" : "▶️"}
+        </button>
+        <button class="btn-icono peligro" onclick="eliminarProc(${p.id})">🗑️</button>
+      </td>
+    </tr>`;
+  }).join(""));
+  filtrarTabla("p-buscar", "p-cuerpo");
+}
+
+// --- Schema builder: filas de campos -> JSON Schema (y viceversa) ---
+
+// Cada campo: { clave, tipo, descripcion, crudo? }. `crudo` conserva la
+// definición original cuando el tipo es complejo (objetos/arrays importados de
+// Extend) para no perderla al regenerar el esquema.
+let CAMPOS = [];
+const TIPOS_SB = { string: "Texto", number: "Número", date: "Fecha", boolean: "Booleano" };
+
+function renderCampos() {
+  const $c = $("#sb-cuerpo");
+  if (!CAMPOS.length) {
+    $c.html('<tr><td colspan="4" class="sin-datos">Sin campos: añade el primero.</td></tr>');
+    return;
+  }
+  $c.html(CAMPOS.map((c, i) => {
+    const opciones = Object.entries(TIPOS_SB).map(([v, t]) =>
+      `<option value="${v}" ${c.tipo === v ? "selected" : ""}>${t}</option>`).join("");
+    const sel = c.tipo === "avanzado"
+      ? `<select class="sb-tipo" disabled><option value="avanzado" selected>Avanzado</option></select>`
+      : `<select class="sb-tipo">${opciones}</select>`;
+    return `<tr>
+      <td><input type="text" class="sb-clave" value="${escapar(c.clave)}" placeholder="numero_cedula"></td>
+      <td>${sel}</td>
+      <td><input type="text" class="sb-desc" value="${escapar(c.descripcion)}" placeholder="Cómo reconocer este campo en el documento"></td>
+      <td class="celda-acciones"><button class="btn-icono peligro" type="button" onclick="quitarCampo(${i})">🗑️</button></td>
+    </tr>`;
+  }).join(""));
+}
+
+// Sincroniza CAMPOS con lo escrito en la tabla (se llama antes de cualquier cambio).
+function leerCamposDelDOM() {
+  const nuevos = [];
+  $("#sb-cuerpo tr").each(function (i) {
+    const $clave = $(this).find(".sb-clave");
+    if (!$clave.length) return;  // fila de "sin datos"
+    const previo = CAMPOS[i] || {};
+    nuevos.push({
+      clave: ($clave.val() || "").trim(),
+      tipo: $(this).find(".sb-tipo").val(),
+      descripcion: ($(this).find(".sb-desc").val() || "").trim(),
+      crudo: previo.crudo,
+    });
+  });
+  CAMPOS = nuevos;
+}
+
+function agregarCampo() {
+  leerCamposDelDOM();
+  CAMPOS.push({ clave: "", tipo: "string", descripcion: "" });
+  renderCampos();
+}
+
+function quitarCampo(i) {
+  leerCamposDelDOM();
+  CAMPOS.splice(i, 1);
+  renderCampos();
+}
+
+// Construye el JSON Schema desde las filas. Devuelve [ok, esquema|null].
+function construirEsquema() {
+  leerCamposDelDOM();
+  const campos = CAMPOS.filter(c => c.clave || c.descripcion);  // ignora filas vacías
+  if (!campos.length) return [true, null];
+  const props = {};
+  for (const c of campos) {
+    const clave = c.clave.replace(/\s+/g, "_");
+    if (!clave) { avisar("Hay un campo sin clave: complétala o elimina la fila.", true); return [false, null]; }
+    if (props[clave]) { avisar(`Clave duplicada: '${clave}'.`, true); return [false, null]; }
+    if (c.crudo) {
+      props[clave] = { ...c.crudo, description: c.descripcion || c.crudo.description };
+      continue;
+    }
+    const p = { description: c.descripcion };
+    if (c.tipo === "date") { p.type = ["string", "null"]; p.format = "date"; }
+    else { p.type = [c.tipo, "null"]; }
+    props[clave] = p;
+  }
+  return [true, { type: "object", properties: props }];
+}
+
+// Convierte un JSON Schema existente en filas del builder.
+function esquemaAFilas(esq) {
+  const props = (esq && esq.properties) || {};
+  return Object.entries(props).map(([clave, v]) => {
+    const tipos = Array.isArray(v.type) ? v.type : [v.type];
+    let tipo = tipos.find(t => t && t !== "null") || "string";
+    if (tipo === "string" && v.format === "date") tipo = "date";
+    const simple = Object.keys(TIPOS_SB).includes(tipo) && !v.properties && !v.items;
+    return {
+      clave,
+      tipo: simple ? tipo : "avanzado",
+      descripcion: v.description || "",
+      crudo: simple ? undefined : v,
+    };
+  });
+}
+
+// Muestra/oculta el JSON generado (solo lectura, para transparencia).
+function alternarJson() {
+  const $pre = $("#sb-json");
+  if ($pre.hasClass("oculto")) {
+    const [ok, esq] = construirEsquema();
+    if (!ok) return;
+    $pre.text(esq ? JSON.stringify(esq, null, 2) : "(sin esquema)").removeClass("oculto");
+  } else {
+    $pre.addClass("oculto");
+  }
+}
+
+// --- Builder de clasificaciones (operación 'clasificar') ---
+
+// Cada clasificación: { clave (id), tipo (etiqueta type), descripcion }.
+let CLASIFS = [];
+
+function renderClasifs() {
+  const $c = $("#cb-cuerpo");
+  if (!CLASIFS.length) {
+    $c.html('<tr><td colspan="4" class="sin-datos">Sin clasificaciones propias: esta ruta usará los prompts globales.</td></tr>');
+    return;
+  }
+  $c.html(CLASIFS.map((c, i) => `
+    <tr>
+      <td><input type="text" class="cb-clave" value="${escapar(c.clave)}" placeholder="cedula"></td>
+      <td><input type="text" class="cb-tipo" value="${escapar(c.tipo)}" placeholder="CEDULA (u 'other')"></td>
+      <td><input type="text" class="cb-desc" value="${escapar(c.descripcion)}" placeholder="Describe el documento con detalle…"></td>
+      <td class="celda-acciones"><button class="btn-icono peligro" type="button" onclick="quitarClasif(${i})">🗑️</button></td>
+    </tr>`).join(""));
+}
+
+function leerClasifsDelDOM() {
+  const nuevas = [];
+  $("#cb-cuerpo tr").each(function () {
+    const $clave = $(this).find(".cb-clave");
+    if (!$clave.length) return;  // fila de "sin datos"
+    nuevas.push({
+      clave: ($clave.val() || "").trim(),
+      tipo: ($(this).find(".cb-tipo").val() || "").trim(),
+      descripcion: ($(this).find(".cb-desc").val() || "").trim(),
+    });
+  });
+  CLASIFS = nuevas;
+}
+
+function agregarClasif() {
+  leerClasifsDelDOM();
+  CLASIFS.push({ clave: "", tipo: "", descripcion: "" });
+  renderClasifs();
+}
+
+function quitarClasif(i) {
+  leerClasifsDelDOM();
+  CLASIFS.splice(i, 1);
+  renderClasifs();
+}
+
+// Construye {"classifications": [...]} desde las filas, o null si está vacío
+// (= usar los prompts globales). Devuelve [ok, esquema|null].
+function construirClasifs() {
+  leerClasifsDelDOM();
+  const filas = CLASIFS.filter(c => c.clave || c.tipo || c.descripcion);
+  if (!filas.length) return [true, null];
+  const vistas = {};
+  const lista = [];
+  for (const c of filas) {
+    const clave = c.clave.replace(/\s+/g, "_");
+    if (!clave || !c.tipo || !c.descripcion) {
+      avisar("Cada clasificación necesita clave, etiqueta y descripción.", true);
+      return [false, null];
+    }
+    if (vistas[clave]) { avisar(`Clave duplicada: '${clave}'.`, true); return [false, null]; }
+    vistas[clave] = true;
+    lista.push({ id: clave, type: c.tipo, description: c.descripcion });
+  }
+  return [true, { classifications: lista }];
+}
+
+// Convierte el esquema guardado ({"classifications": [...]}) en filas del builder.
+function clasifsAFilas(esq) {
+  const lista = (esq && esq.classifications) || [];
+  return lista.map(c => ({
+    clave: c.id || "",
+    tipo: c.type || "",
+    descripcion: c.description || "",
+  }));
+}
+
+function alternarJsonClasif() {
+  const $pre = $("#cb-json");
+  if ($pre.hasClass("oculto")) {
+    const [ok, esq] = construirClasifs();
+    if (!ok) return;
+    $pre.text(esq ? JSON.stringify(esq, null, 2) : "(sin clasificaciones propias: usa los prompts globales)")
+        .removeClass("oculto");
+  } else {
+    $pre.addClass("oculto");
+  }
+}
+
+// Trae las clasificaciones de un clasificador publicado en Extend y las vuelca
+// al builder (el mismo endpoint que el de extracción: devuelve schema o
+// classifications según el tipo del procesador).
+async function importarClasifs(inpPidId, selVerId) {
+  const pid = $("#" + inpPidId).val().trim();
+  // El id interno de la versión (data-vid) solo existe en versiones sincronizadas.
+  const vid = $("#" + selVerId + " option:selected").data("vid");
+  if (!pid || !vid) { avisar("Carga los procesadores de Extend y elige una versión publicada para importar.", true); return; }
+  const url = API_PROCESADORES + "extend/esquema?procesador_id=" + encodeURIComponent(pid) + "&version_id=" + encodeURIComponent(vid);
+  const { status, ok, cuerpo } = await llamar(url);
+  if (ok) {
+    if (!cuerpo || !(cuerpo.classifications || []).length) {
+      avisar("Ese procesador/versión no tiene clasificaciones.", true);
+      return;
+    }
+    CLASIFS = clasifsAFilas(cuerpo);
+    renderClasifs();
+    avisar(`${CLASIFS.length} clasificación(es) importadas de Extend. Revísalas y guarda.`);
+    return;
+  }
+  if (sesionInvalida(status)) return;
+  avisar((cuerpo && cuerpo.detail) || `No se pudo importar (HTTP ${status}).`, true);
+}
+
+// Descarga como archivo .json lo construido por el builder que se le pase.
+function exportarJson(construir, nombre) {
+  const [ok, esq] = construir();
+  if (!ok) return;
+  if (!esq) { avisar("No hay nada que exportar: el builder está vacío.", true); return; }
+  const blob = new Blob([JSON.stringify(esq, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${nombre}.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+  avisar(`Exportado como ${nombre}.json.`);
+}
+
+// Muestra la sección según la operación: clasificaciones (clasificar),
+// campos de extracción (extraer) o target (parse).
+function actualizarSecciones() {
+  const op = $("#pr-operacion").val();
+  $("#clasif-seccion").toggleClass("oculto", op !== "clasificar");
+  $("#sb-seccion").toggleClass("oculto", op !== "extraer");
+  $("#parse-seccion").toggleClass("oculto", op !== "parse");
+}
+
+// Lee un umbral de confianza y devuelve [ok, valor]. valor es null si está vacío.
+function leerUmbral(texto) {
+  texto = texto.trim();
+  if (!texto) return [true, null];
+  const n = Number(texto);
+  if (Number.isNaN(n) || n < 0 || n > 1) {
+    avisar("El umbral debe ser un número entre 0 y 1 (ej. 0.85).", true);
+    return [false, null];
+  }
+  return [true, n];
+}
+
+// --- Sincronización con Extend Studio ---
+
+// Procesadores publicados en Extend, cacheados tras "Cargar de Extend" (por id).
+let EXTEND_CACHE = {};
+
+async function cargarExtend(tipo, selProcId, selVerId, inpPidId) {
+  if (tipo !== "clasificar" && tipo !== "extraer") {
+    avisar("Solo 'clasificar' y 'extraer' tienen procesadores en Extend.", true);
+    return;
+  }
+  const { status, ok, cuerpo } = await llamar(API_PROCESADORES + "extend?tipo=" + tipo);
+  if (!ok) {
+    if (sesionInvalida(status)) return;
+    avisar((cuerpo && cuerpo.detail) || `No se pudo consultar Extend (HTTP ${status}).`, true);
+    return;
+  }
+  $("#" + selProcId).html('<option value="">—</option>' + cuerpo.map(p => {
+    EXTEND_CACHE[p.id] = p;
+    return `<option value="${escapar(p.id)}">${escapar(p.nombre || p.id)} (${escapar(p.id)})</option>`;
+  }).join(""));
+  avisar(`${cuerpo.length} procesador(es) de Extend cargados.`);
+}
+
+// Opciones fijas del select de versión. value = lo que se guarda y se envía al
+// ejecutar ('' = última publicada, 'draft' = borrador, o el NÚMERO publicado);
+// data-vid = el id interno de la versión (lo que necesita importar el esquema).
+function opcionesVersionBase() {
+  return '<option value="">última publicada</option>' +
+         '<option value="draft">borrador (draft — cambios sin publicar)</option>';
+}
+
+// Al elegir un procesador del select: rellena el id y las versiones disponibles.
+function elegirExtend(selProcId, selVerId, inpPidId) {
+  const id = $("#" + selProcId).val();
+  const p = EXTEND_CACHE[id];
+  $("#" + inpPidId).val(id);
+  $("#" + selVerId).html(opcionesVersionBase() +
+    ((p && p.versiones) || []).map(v =>
+      `<option value="${escapar(v.version)}" data-vid="${escapar(v.id)}">v${escapar(v.version)}</option>`).join(""));
+}
+
+// Trae el JSON Schema de un extractor de Extend y lo vuelca al schema builder.
+async function importarEsquema(inpPidId, selVerId) {
+  const pid = $("#" + inpPidId).val().trim();
+  // El id interno de la versión (data-vid) solo existe en versiones sincronizadas.
+  const vid = $("#" + selVerId + " option:selected").data("vid");
+  if (!pid || !vid) { avisar("Carga los procesadores de Extend y elige una versión publicada para importar.", true); return; }
+  const url = API_PROCESADORES + "extend/esquema?procesador_id=" + encodeURIComponent(pid) + "&version_id=" + encodeURIComponent(vid);
+  const { status, ok, cuerpo } = await llamar(url);
+  if (ok) {
+    if (!cuerpo || !Object.keys(cuerpo).length) { avisar("Ese procesador/versión no tiene esquema de extracción.", true); return; }
+    CAMPOS = esquemaAFilas(cuerpo);
+    renderCampos();
+    avisar(`${CAMPOS.length} campo(s) importados de Extend. Revísalos y guarda.`);
+    return;
+  }
+  if (sesionInvalida(status)) return;
+  avisar((cuerpo && cuerpo.detail) || `No se pudo importar el esquema (HTTP ${status}).`, true);
+}
+
+// --- Crear / editar (mismo modal) ---
+
+function _limpiarModalProc() {
+  $("#pr-clase, #pr-pid, #pr-umbral").val("");
+  $("#pr-extend").html('<option value="">—</option>');
+  $("#pr-version").html(opcionesVersionBase());
+  $("#pr-target").val("markdown");
+  $("#pr-sync").prop("checked", true);
+  $("#pr-publicar").prop("checked", false);
+  $("#sb-json, #cb-json").addClass("oculto");
+}
+
+function abrirCrearProc() {
+  procEnEdicion = null;
+  $("#mp-titulo").text("Nuevo procesador");
+  // La identidad (ruta, operación, clase) se elige al crear.
+  $("#pr-ruta, #pr-operacion, #pr-clase").prop("disabled", false);
+  $("#pr-modo").val("inline");
+  _limpiarModalProc();
+  CAMPOS = [{ clave: "", tipo: "string", descripcion: "" }];
+  renderCampos();
+  CLASIFS = [];          // vacío = la ruta usa los prompts globales
+  renderClasifs();
+  actualizarSecciones();
+  abrirModal("modal-proc");
+}
+
+function abrirEditarProc(id) {
+  const p = PROCS[id];
+  if (!p) return;
+  procEnEdicion = id;
+  $("#mp-titulo").text(`Editar procesador #${id}`);
+  _limpiarModalProc();
+  // La identidad (ruta, operación, clase) es fija al editar: solo cambia la config.
+  $("#pr-ruta").val(p.ruta).prop("disabled", true);
+  $("#pr-operacion").val(p.operacion).prop("disabled", true);
+  $("#pr-clase").val(p.clase).prop("disabled", true);
+  $("#pr-modo").val(p.modo);
+  $("#pr-pid").val(p.procesador_id || "");
+  if (p.version === "draft") {
+    $("#pr-version").val("draft");
+  } else if (p.version) {
+    $("#pr-version").html(opcionesVersionBase() +
+      `<option value="${escapar(p.version)}" selected>v${escapar(p.version)}</option>`);
+  }
+  $("#pr-umbral").val(p.umbral ?? "");
+  if (p.operacion === "extraer") {
+    CAMPOS = esquemaAFilas(p.esquema);
+    if (!CAMPOS.length) CAMPOS = [{ clave: "", tipo: "string", descripcion: "" }];
+    renderCampos();
+  } else if (p.operacion === "parse") {
+    $("#pr-target").val((p.esquema && p.esquema.target) || "markdown");
+  } else if (p.operacion === "clasificar") {
+    CLASIFS = clasifsAFilas(p.esquema);
+    renderClasifs();
+  }
+  actualizarSecciones();
+  abrirModal("modal-proc");
+}
+
+async function guardarProc() {
+  const op = $("#pr-operacion").val();
+  const modo = $("#pr-modo").val();
+  const procesador_id = $("#pr-pid").val().trim();
+  const version = $("#pr-version").val() || null;
+  const [ok_umb, umbral] = leerUmbral($("#pr-umbral").val());
+  if (!ok_umb) return;
+
+  // El esquema sale del builder que corresponde a la operación:
+  // clasificar -> clasificaciones propias (o null = prompts globales),
+  // extraer -> campos del schema builder, parse -> target.
+  let esquema = null;
+  if (op === "clasificar") {
+    const [ok_cl, esq] = construirClasifs();
+    if (!ok_cl) return;
+    esquema = esq;
+  } else if (op === "extraer") {
+    const [ok_esq, esq] = construirEsquema();
+    if (!ok_esq) return;
+    esquema = esq;
+    if (modo === "inline" && !esquema) {
+      avisar("Una extracción inline necesita al menos un campo en el schema builder.", true);
+      return;
+    }
+  } else if (op === "parse") {
+    esquema = { target: $("#pr-target").val() || "markdown" };
+  }
+
+  let resp;
+  if (procEnEdicion === null) {
+    const ruta = $("#pr-ruta").val();
+    const operacion = $("#pr-operacion").val();
+    const clase = $("#pr-clase").val().trim();
+    if (!ruta) { avisar("No hay rutas activas en el catálogo; crea una en la pestaña Rutas.", true); return; }
+    resp = await llamar(API_PROCESADORES, {
+      method: "POST",
+      body: JSON.stringify({ ruta, operacion, clase, modo, procesador_id: procesador_id || null, version, esquema, umbral }),
+    });
+  } else {
+    resp = await llamar(API_PROCESADORES + procEnEdicion, {
+      method: "PUT",
+      body: JSON.stringify({ modo, procesador_id: procesador_id || null, version, esquema, umbral }),
+    });
+  }
+  const { status, ok, cuerpo } = resp;
+  if (ok) {
+    cerrarModal("modal-proc");
+    const idFila = procEnEdicion === null ? (cuerpo && cuerpo.id) : procEnEdicion;
+    let msg = procEnEdicion === null ? "Procesador creado." : `Procesador #${procEnEdicion} actualizado.`;
+    let conError = false;
+    // Empuja el esquema guardado al procesador publicado en Extend (borrador),
+    // y opcionalmente publica la versión.
+    if ($("#pr-sync").is(":checked") && procesador_id && esquema && op !== "parse") {
+      const publicar = $("#pr-publicar").is(":checked");
+      const rs = await llamar(API_PROCESADORES + idFila + "/extend" + (publicar ? "?publicar=true" : ""),
+                              { method: "POST" });
+      if (rs.ok) {
+        const vPub = rs.cuerpo && rs.cuerpo.version_publicada;
+        msg += vPub
+          ? ` Esquema actualizado y PUBLICADO en Extend como v${vPub}.`
+          : " Esquema actualizado en Extend (versión borrador).";
+      } else {
+        conError = true;
+        msg += " ⚠ Guardado local OK, pero Extend no se actualizó: " +
+               ((rs.cuerpo && rs.cuerpo.detail) || `HTTP ${rs.status}`);
+      }
+    }
+    avisar(msg, conError);
+    cargarDatos();
+    return;
+  }
+  if (sesionInvalida(status)) return;
+  avisar((cuerpo && cuerpo.detail) || `No se pudo guardar (HTTP ${status}).`, true);
+}
+
+async function alternarProc(id, activar) {
+  const { status, ok, cuerpo } = await llamar(API_PROCESADORES + id, {
+    method: "PUT", body: JSON.stringify({ activo: activar === true || activar === "true" }),
+  });
+  if (ok) { cargarDatos(); return; }
+  if (sesionInvalida(status)) return;
+  avisar((cuerpo && cuerpo.detail) || `No se pudo cambiar el estado (HTTP ${status}).`, true);
+}
+
+async function eliminarProc(id) {
+  if (!confirm(`¿Eliminar el procesador #${id}? Si solo quieres dejar de usarlo, mejor desactívalo.`)) return;
+  const { status, ok, cuerpo } = await llamar(API_PROCESADORES + id, { method: "DELETE" });
+  if (ok) { avisar(`Procesador #${id} eliminado.`); cargarDatos(); return; }
+  if (sesionInvalida(status)) return;
+  avisar((cuerpo && cuerpo.detail) || `No se pudo eliminar (HTTP ${status}).`, true);
+}
+
+// Al cambiar la operación en el modal, se muestra la sección que corresponde
+// (builder para extraer, target para parse, nada para clasificar).
+$("#pr-operacion").on("change", actualizarSecciones);
+</script>
+{% endblock %}

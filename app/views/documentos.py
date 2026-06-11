@@ -1,0 +1,182 @@
+"""
+View de inferencia: clasificación, OCR y validación de identidad.
+
+Solo capa HTTP: lee la petición, llama al servicio ServicioDocumentos y traduce
+el resultado (o los errores) a códigos HTTP. Sin lógica de negocio.
+"""
+import logging
+from typing import Optional
+
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+
+from app.schemas.clasificador import RespuestaClasificacion
+from app.schemas.ocr import RespuestaOCR
+from app.schemas.validador import RespuestaValidacion
+from app.services import documentos as srv
+from app.services.documentos import documentos
+from app.services.errores import ErrorDeArchivo, ErrorDeProveedor, ErrorDeValidacion
+
+logger = logging.getLogger(__name__)
+
+api = APIRouter()
+
+
+async def leer_archivo(file: UploadFile) -> bytes:
+    """
+    Lee el archivo subido, rechazando ANTES los que exceden el tamaño máximo.
+
+    El chequeo va antes de `file.read()` porque read() carga el archivo
+    completo en memoria: sin este filtro, un archivo de 2 GB consumiría
+    2 GB de RAM solo para luego ser rechazado por tamaño.
+    """
+    if file.size is not None and file.size > srv.MAX_BYTES:
+        limite_mb = srv.MAX_BYTES / (1024 * 1024)
+        raise HTTPException(
+            status_code=400,
+            detail=f"El archivo excede el tamaño máximo permitido ({limite_mb:.0f} MB).",
+        )
+    try:
+        return await file.read()
+    except Exception:
+        # Ej.: el cliente cortó la conexión a mitad de la subida.
+        logger.exception("No se pudo leer el archivo subido")
+        raise HTTPException(status_code=400, detail="No se pudo leer el archivo subido.")
+
+
+@api.post("/clasificar/", response_model=RespuestaClasificacion, tags=["Clasificadores"])
+async def clasificar_documento(file: UploadFile = File(...)):
+    """Recibe un archivo y devuelve su clasificación (clase, confianza, validez)."""
+    contenido = await leer_archivo(file)
+
+    try:
+        resultado = await documentos.clasificar(contenido, file.content_type, file.filename or "")
+    except ErrorDeArchivo as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except ErrorDeProveedor as e:
+        # El proveedor (Extend) falló: 502 para distinguirlo de un error interno.
+        raise HTTPException(status_code=502, detail=str(e))
+    except Exception:
+        # El detalle completo va al log del servidor; al cliente solo le llega
+        # un mensaje genérico para no exponer información interna.
+        logger.exception("Error procesando el documento en /clasificar/")
+        raise HTTPException(status_code=500, detail="Error interno al procesar el documento.")
+
+    # Cuando no es válido hay dos causas distintas y el mensaje debe decir
+    # cuál fue: una clase rechazada puede venir con confianza altísima
+    # (ej. "OTROS al 99%") y ahí "confianza insuficiente" sería mentira.
+    if resultado["es_valido"]:
+        mensaje = "Documento procesado y clasificado con éxito."
+    elif resultado["clase_detectada"] in srv.CLASES_RECHAZADAS:
+        mensaje = "El documento no corresponde a ninguno de los tipos aceptados."
+    else:
+        mensaje = "La confianza del modelo es insuficiente para dar por válido este documento."
+
+    return RespuestaClasificacion(
+        result=resultado["es_valido"],
+        message=mensaje,
+        document_class=resultado["clase_detectada"],
+        confidence=resultado["confianza"],
+    )
+
+
+@api.post("/ocr/", response_model=RespuestaOCR, tags=["OCR"])
+async def extraer_texto(
+    file: UploadFile = File(...),
+    texto_a_buscar: Optional[str] = Form(
+        None,
+        description=(
+            "Opcional. Texto a buscar dentro del documento. Si se envía, la "
+            "respuesta indica si aparece, cuántas veces y en qué contexto "
+            "(ignorando mayúsculas y tildes). Si se omite, solo se devuelve "
+            "el texto completo extraído."
+        ),
+    ),
+):
+    """Extrae el texto de un documento por OCR y, opcionalmente, busca un término en él."""
+    contenido = await leer_archivo(file)
+
+    try:
+        resultado = await documentos.ocr(contenido, file.content_type, texto_a_buscar, file.filename or "")
+    except ErrorDeArchivo as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except ErrorDeProveedor as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    except Exception:
+        logger.exception("Error procesando el documento en /ocr/")
+        raise HTTPException(status_code=500, detail="Error interno al procesar el documento.")
+
+    contenido_ocr = resultado["texto_completo"]
+    busqueda = resultado["busqueda"]
+    hay_texto = bool(contenido_ocr)
+
+    if not hay_texto:
+        mensaje = "No se pudo extraer texto del documento."
+    elif busqueda is None:
+        mensaje = f"Texto extraído del documento ({len(contenido_ocr)} caracteres)."
+    elif busqueda["encontrado"]:
+        mensaje = (
+            f"Texto extraído; el término buscado aparece "
+            f"{busqueda['cantidad']} vez/veces en el documento."
+        )
+    else:
+        mensaje = "Texto extraído; el término buscado no aparece en el documento."
+
+    return RespuestaOCR(
+        result=hay_texto,
+        message=mensaje,
+        content=contenido_ocr,
+    )
+
+
+@api.post("/validaciones/validar-identidad/", response_model=RespuestaValidacion, tags=["Validadores"])
+async def validar_documento(
+    file: UploadFile = File(...),
+    cedula_sistema: Optional[str] = Form(
+        None,
+        description=(
+            "Opcional. Si se envía, se compara contra el número de cédula "
+            "extraído del documento (extracción estructurada). Si se omite, "
+            "solo se valida que el documento sea una cédula y se extraen sus datos."
+        ),
+    ),
+):
+    contenido = await leer_archivo(file)
+
+    try:
+        resultado = await documentos.validar(contenido, file.content_type, cedula_sistema, file.filename or "")
+    except (ErrorDeArchivo, ErrorDeValidacion) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except ErrorDeProveedor as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    except Exception:
+        logger.exception("Error procesando el documento en /validaciones/validar-identidad/")
+        raise HTTPException(status_code=500, detail="Error interno al procesar el documento.")
+
+    # El mensaje depende del tipo de documento y del modo en que se usó.
+    clase = resultado["clase_detectada"]
+    if not resultado["es_identidad"]:
+        mensaje = "El documento no fue reconocido como cédula ni pasaporte."
+    elif resultado["identificacion_sistema"] is None:
+        # Modo simple: documento de identidad reconocido, datos extraídos.
+        mensaje = f"Documento reconocido como {clase}; datos extraídos."
+    elif not resultado["es_cedula"]:
+        mensaje = (
+            "Se envió un número de cédula, pero el documento no es una cédula; "
+            "no se comparó el número."
+        )
+    elif resultado["identificacion_documento"] is None:
+        mensaje = "No se pudo extraer un número de identificación del documento."
+    elif resultado["coincide"]:
+        mensaje = "La identificación del sistema coincide con la del documento."
+    else:
+        mensaje = "La identificación del sistema NO coincide con la del documento."
+
+    return RespuestaValidacion(
+        result=resultado["es_identidad"],
+        message=mensaje,
+        match_document=resultado["coincide"],
+        document_class=resultado["clase_detectada"],
+        confidence=resultado["confianza"],
+        ocr=resultado["ocr"],
+        datos=resultado["datos"],
+    )

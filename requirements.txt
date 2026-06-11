@@ -9,10 +9,13 @@ pydantic-settings
 # --- Subida de archivos (Form / UploadFile) ---
 python-multipart
 
-# --- Google Cloud Document AI ---
-google-cloud-documentai
+# --- Plantillas del panel de administración (app/templates) ---
+jinja2
 
-# --- Base de datos PostgreSQL (API keys) ---
+# --- Cliente HTTP asíncrono para la API de Extend ---
+httpx
+
+# --- Base de datos PostgreSQL (API keys y clasificaciones) ---
 psycopg2-binary
 
 # --- Cliente HTTP para el script de prueba ---

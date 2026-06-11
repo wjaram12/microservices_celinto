@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{% block titulo %}Administración{% endblock %}</title>
+<style>
+  /* ============ Material Design 3 — tokens (baseline, esquema claro) ============ */
+  :root {
+    /* Color */
+    --md-primary: #6750A4;            --md-on-primary: #FFFFFF;
+    --md-primary-container: #EADDFF;  --md-on-primary-container: #21005D;
+    --md-secondary: #625B71;          --md-on-secondary: #FFFFFF;
+    --md-secondary-container: #E8DEF8;--md-on-secondary-container: #1D192B;
+    --md-error: #B3261E;              --md-on-error: #FFFFFF;
+    --md-error-container: #F9DEDC;    --md-on-error-container: #410E0B;
+    --md-surface: #FEF7FF;            --md-on-surface: #1D1B20;
+    --md-on-surface-variant: #49454F;
+    --md-surface-container-lowest: #FFFFFF;
+    --md-surface-container: #F3EDF7;
+    --md-surface-container-high: #ECE6F0;
+    --md-outline: #79747E;            --md-outline-variant: #CAC4D0;
+    --md-inverse-surface: #322F35;    --md-inverse-on-surface: #F5EFF7;
+    /* "Éxito" no existe en la paleta base de MD3; tono verde armonizado */
+    --md-exito-container: #D7EFD9;    --md-on-exito-container: #0E5223;
+    /* Forma */
+    --md-radio-xs: 4px;  --md-radio-s: 8px;  --md-radio-m: 12px;
+    --md-radio-l: 16px;  --md-radio-xl: 28px; --md-radio-pildora: 999px;
+    /* Elevación */
+    --md-elev-1: 0 1px 2px rgba(0,0,0,.30), 0 1px 3px 1px rgba(0,0,0,.15);
+    --md-elev-2: 0 1px 2px rgba(0,0,0,.30), 0 2px 6px 2px rgba(0,0,0,.15);
+    --md-elev-3: 0 4px 8px 3px rgba(0,0,0,.15), 0 1px 3px rgba(0,0,0,.30);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    font-family: Roboto, "Segoe UI", system-ui, sans-serif;
+    margin: 0; background: var(--md-surface); color: var(--md-on-surface);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ============ Layout tipo CRM: sidebar + barra + contenido ============ */
+  .layout { display: flex; min-height: 100vh; }
+  aside {
+    width: 240px; flex-shrink: 0;
+    background: var(--md-surface-container);
+    display: flex; flex-direction: column;
+    padding: 16px 12px;
+    position: sticky; top: 0; height: 100vh;
+  }
+  .marca { padding: 8px 16px 20px; }
+  .marca b { font-size: 1.05rem; display: block; }
+  .marca span { font-size: .75rem; color: var(--md-on-surface-variant); }
+  aside nav { flex: 1; display: flex; flex-direction: column; gap: 4px; }
+  .nav-item {
+    display: flex; align-items: center; gap: 12px;
+    padding: 13px 16px; border-radius: var(--md-radio-pildora);
+    color: var(--md-on-surface-variant); text-decoration: none;
+    font-size: .9rem; font-weight: 500;
+    transition: background .15s;
+  }
+  .nav-item:hover { background: var(--md-surface-container-high); }
+  .nav-item.activa { background: var(--md-secondary-container); color: var(--md-on-secondary-container); }
+  .aside-pie { padding: 8px 4px 0; }
+  .aside-pie button { width: 100%; }
+
+  .contenido { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .barra {
+    background: var(--md-surface-container-lowest);
+    padding: 18px 28px; box-shadow: var(--md-elev-1);
+    position: sticky; top: 0; z-index: 5;
+  }
+  .barra h1 { margin: 0; font-size: 1.375rem; font-weight: 400; }
+  .barra p { margin: 4px 0 0; color: var(--md-on-surface-variant); font-size: .82rem; }
+  main { padding: 24px 28px; max-width: 1200px; width: 100%; }
+
+  /* ---- Cards (login y avisos) ---- */
+  .tarjeta {
+    background: var(--md-surface-container-lowest);
+    border: none; border-radius: var(--md-radio-m);
+    padding: 18px 20px; margin-bottom: 16px;
+    box-shadow: var(--md-elev-1);
+  }
+
+  /* ---- Toolbar de cada listado ---- */
+  .toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+  .toolbar input[type=text] { max-width: 320px; }
+
+  /* ---- Tabla de datos ---- */
+  .tabla-envoltura {
+    background: var(--md-surface-container-lowest);
+    border-radius: var(--md-radio-m); box-shadow: var(--md-elev-1);
+    overflow-x: auto;
+  }
+  table.tabla { width: 100%; border-collapse: collapse; font-size: .875rem; }
+  .tabla th {
+    text-align: left; font-size: .72rem; font-weight: 600; letter-spacing: .03em;
+    color: var(--md-on-surface-variant); text-transform: uppercase;
+    padding: 14px 16px; border-bottom: 1px solid var(--md-outline-variant);
+    white-space: nowrap;
+  }
+  .tabla td { padding: 12px 16px; border-bottom: 1px solid var(--md-surface-container); vertical-align: middle; }
+  .tabla tbody tr:hover { background: var(--md-surface-container); }
+  .tabla tr.inactivo td { opacity: .55; }
+  .tabla .sub { display: block; font-size: .72rem; color: var(--md-on-surface-variant); }
+  .celda-acciones { white-space: nowrap; text-align: right; }
+  .sin-datos { padding: 28px 16px; text-align: center; color: var(--md-on-surface-variant); }
+
+  /* ---- Campos de texto (outlined) ---- */
+  label { display: block; font-size: .75rem; font-weight: 500; margin: 12px 0 4px; color: var(--md-on-surface-variant); }
+  input[type=text], input[type=password], textarea, select {
+    width: 100%; padding: 12px 14px;
+    border: 1px solid var(--md-outline); border-radius: var(--md-radio-xs);
+    font: inherit; font-size: .9rem;
+    background: transparent; color: var(--md-on-surface);
+    transition: border-color .15s, box-shadow .15s;
+  }
+  input:focus, textarea:focus, select:focus {
+    outline: none; border-color: var(--md-primary);
+    box-shadow: 0 0 0 1px var(--md-primary);
+  }
+  input:disabled, select:disabled { background: var(--md-surface-container); color: var(--md-on-surface-variant); }
+  textarea { min-height: 90px; resize: vertical; }
+  .fila { display: flex; gap: 14px; flex-wrap: wrap; }
+  .fila > div { flex: 1; min-width: 180px; }
+
+  /* ---- Botones ---- */
+  button {
+    font: inherit; font-size: .875rem; font-weight: 500;
+    border: 0; border-radius: var(--md-radio-pildora);
+    height: 40px; padding: 0 22px; cursor: pointer;
+    transition: box-shadow .15s, filter .15s;
+  }
+  .btn-principal { background: var(--md-primary); color: var(--md-on-primary); }
+  .btn-suave { background: var(--md-secondary-container); color: var(--md-on-secondary-container); }
+  .btn-peligro { background: var(--md-error-container); color: var(--md-on-error-container); }
+  .btn-texto { background: transparent; color: var(--md-primary); }
+  button:hover { box-shadow: var(--md-elev-1); filter: brightness(.97); }
+  .btn-principal:hover { filter: brightness(1.08); }
+  .btn-texto:hover { box-shadow: none; background: var(--md-surface-container); }
+  .btn-icono {
+    height: 34px; padding: 0 10px; margin-left: 4px;
+    border-radius: var(--md-radio-s); font-size: .8rem;
+    background: var(--md-secondary-container); color: var(--md-on-secondary-container);
+  }
+  .btn-icono.peligro { background: var(--md-error-container); color: var(--md-on-error-container); }
+  .acciones { margin-top: 14px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .meta { font-size: .72rem; color: var(--md-on-surface-variant); margin-top: 8px; }
+
+  /* ---- Chips (tonales) ---- */
+  .etiqueta { font-size: .72rem; font-weight: 600; padding: 4px 12px; border-radius: var(--md-radio-s); white-space: nowrap; }
+  .etiqueta.admin { background: var(--md-error-container); color: var(--md-on-error-container); }
+  .etiqueta.consumo, .etiqueta.tipo { background: var(--md-secondary-container); color: var(--md-on-secondary-container); }
+  .etiqueta.activo { background: var(--md-exito-container); color: var(--md-on-exito-container); }
+  .etiqueta.revocado { background: var(--md-surface-container-high); color: var(--md-on-surface-variant); }
+
+  /* ---- Modales (diálogos MD3) ---- */
+  .modal-fondo {
+    position: fixed; inset: 0; z-index: 30;
+    background: rgba(29, 27, 32, .45);
+    display: none; align-items: center; justify-content: center; padding: 16px;
+  }
+  .modal-fondo.abierta { display: flex; }
+  .modal {
+    background: var(--md-surface-container-lowest);
+    border-radius: var(--md-radio-xl); padding: 24px;
+    width: 100%; max-width: 560px; max-height: 88vh; overflow: auto;
+    box-shadow: var(--md-elev-3);
+  }
+  .modal.ancha { max-width: 780px; }
+  .modal h3 { margin: 0 0 4px; font-size: 1.25rem; font-weight: 400; }
+  .modal .modal-sub { margin: 0 0 10px; font-size: .82rem; color: var(--md-on-surface-variant); }
+  .modal-acciones { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+
+  /* ---- Loader global (bloquea doble clics y navegación) ---- */
+  #cargador {
+    position: fixed; inset: 0; z-index: 50;
+    background: rgba(254, 247, 255, .55);
+    display: none; align-items: center; justify-content: center;
+  }
+  #cargador.activo { display: flex; }
+  .rueda {
+    width: 44px; height: 44px; border-radius: 50%;
+    border: 4px solid var(--md-secondary-container);
+    border-top-color: var(--md-primary);
+    animation: girar .8s linear infinite;
+  }
+  @keyframes girar { to { transform: rotate(360deg); } }
+
+  /* ---- Login ---- */
+  #acceso { max-width: 420px; margin: 10vh auto; padding: 0 16px; }
+  #acceso .tarjeta { text-align: center; border-radius: var(--md-radio-xl); padding: 28px 26px; box-shadow: var(--md-elev-3); }
+  #acceso h2 { color: var(--md-on-surface); font-size: 1.375rem; font-weight: 400; margin-top: 0; }
+  #acceso p { font-size: .88rem; color: var(--md-on-surface-variant); }
+  #acceso input { text-align: center; margin-top: 8px; }
+  #acceso button { width: 100%; margin-top: 18px; }
+  .oculto { display: none; }
+
+  /* ---- Snackbar ---- */
+  #mensaje {
+    position: fixed; bottom: 20px; right: 20px; z-index: 60;
+    padding: 14px 18px; border-radius: var(--md-radio-xs);
+    background: var(--md-inverse-surface); color: var(--md-inverse-on-surface);
+    display: none; max-width: 380px; font-size: .875rem;
+    box-shadow: var(--md-elev-3);
+  }
+  #mensaje.ok { display: block; }
+  #mensaje.error { display: block; background: var(--md-error); color: var(--md-on-error); }
+
+  /* ---- Resalte de clave recién creada ---- */
+  .clave-nueva {
+    margin-top: 14px; background: var(--md-exito-container); color: var(--md-on-exito-container);
+    border-radius: var(--md-radio-m); padding: 14px 16px;
+  }
+  .clave-nueva .valor {
+    font-family: Consolas, monospace; background: var(--md-surface-container-lowest);
+    color: var(--md-on-surface);
+    border: 1px solid var(--md-outline-variant); border-radius: var(--md-radio-s);
+    padding: 8px 10px; word-break: break-all; margin: 8px 0;
+  }
+  .clave-nueva .nota { font-size: .8rem; color: var(--md-on-error-container); }
+</style>
+</head>
+<body>
+
+<div id="acceso">
+  <div class="tarjeta">
+    <h2>🔐 Administración</h2>
+    <p>Introduce tu <b>API key de administrador</b> para gestionar el servicio.</p>
+    <input type="password" id="clave-input" placeholder="wsk_..." autocomplete="off" autofocus
+           onkeydown="if(event.key==='Enter') entrar()">
+    <button class="btn-principal" onclick="entrar()">Entrar</button>
+  </div>
+</div>
+
+<div id="panel" class="oculto">
+  <div class="layout">
+    <aside>
+      <div class="marca">
+        <b>⚙️ Clasificador</b>
+        <span>Panel de administración</span>
+      </div>
+      <nav>
+        <a class="nav-item {{ 'activa' if pagina == 'procesadores' else '' }}" href="/admin/procesadores">🧩 <span>Procesadores</span></a>
+        <a class="nav-item {{ 'activa' if pagina == 'rutas' else '' }}" href="/admin/rutas">🔗 <span>Rutas</span></a>
+        <a class="nav-item {{ 'activa' if pagina == 'consumidores' else '' }}" href="/admin/consumidores">🔑 <span>Consumidores</span></a>
+      </nav>
+      <div class="aside-pie">
+        <button class="btn-suave" onclick="salir()">🚪 Salir</button>
+      </div>
+    </aside>
+    <div class="contenido">
+      <header class="barra">
+        <h1>{% block titulo_pagina %}Panel de Administración{% endblock %}</h1>
+        <p>{% block subtitulo %}{% endblock %}</p>
+      </header>
+      <main>
+        {% block contenido %}{% endblock %}
+      </main>
+    </div>
+  </div>
+</div>
+
+<div id="cargador"><div class="rueda"></div></div>
+<div id="mensaje"></div>
+
+<!-- jQuery vendorizado (app/static/js): sin CDNs, el panel funciona offline. -->
+<script src="/static/js/jquery.min.js"></script>
+<script>
+// --- Helpers compartidos por todas las páginas del panel (jQuery) ---
+// La sesión (la API key admin) vive en sessionStorage del navegador: nunca se
+// guarda en el servidor y muere al cerrar la pestaña.
+let clave = sessionStorage.getItem("admin_api_key") || "";
+
+function avisar(texto, esError = false) {
+  $("#mensaje").text(texto).attr("class", esError ? "error" : "ok");
+  setTimeout(() => { $("#mensaje").attr("class", ""); }, 4000);
+}
+
+function escapar(t) {
+  return $("<div>").text(t ?? "").html();
+}
+
+function mostrarPanel(mostrar) {
+  $("#acceso").toggleClass("oculto", mostrar);
+  $("#panel").toggleClass("oculto", !mostrar);
+}
+
+function salir() {
+  sessionStorage.removeItem("admin_api_key");
+  clave = "";
+  $("#clave-input").val("");
+  mostrarPanel(false);
+}
+
+// --- Loader global ---
+// Cubre toda la pantalla mientras hay peticiones en vuelo: evita los dobles
+// clics en botones (no se puede volver a pulsar nada) y se muestra también al
+// navegar entre páginas del panel.
+let _cargas = 0;
+function _cargando(mas) {
+  _cargas = Math.max(0, _cargas + (mas ? 1 : -1));
+  $("#cargador").toggleClass("activo", _cargas > 0);
+}
+
+function _ajax(url, opciones) {
+  return new Promise(resolve => {
+    $.ajax({
+      url: url,
+      method: opciones.method || "GET",
+      data: opciones.body,
+      contentType: "application/json",
+      dataType: "json",
+      headers: { "X-API-Key": clave },
+    })
+      .done((cuerpo, _texto, xhr) => resolve({ status: xhr.status, ok: true, cuerpo: cuerpo ?? null }))
+      .fail(xhr => resolve({ status: xhr.status, ok: false, cuerpo: xhr.responseJSON || {} }));
+  });
+}
+
+// Devuelve siempre { status, ok, cuerpo } (también en errores HTTP). Toda
+// petición pasa por aquí, así el loader es automático en todo el panel.
+async function llamar(url, opciones = {}) {
+  _cargando(true);
+  try {
+    return await _ajax(url, opciones);
+  } finally {
+    _cargando(false);
+  }
+}
+
+function sesionInvalida(status) {
+  if (status === 401 || status === 403) {
+    salir();
+    avisar("Sesión no válida o sin permisos de administrador.", true);
+    return true;
+  }
+  return false;
+}
+
+// --- Modales ---
+function abrirModal(id) { $("#" + id).addClass("abierta"); }
+function cerrarModal(id) { $("#" + id).removeClass("abierta"); }
+// Clic en el fondo o tecla Escape cierran el modal abierto.
+$(document).on("click", ".modal-fondo", function (e) {
+  if (e.target === e.currentTarget) $(this).removeClass("abierta");
+});
+$(document).on("keydown", function (e) {
+  if (e.key === "Escape") $(".modal-fondo.abierta").removeClass("abierta");
+});
+
+// --- Filtro de tablas (búsqueda en el toolbar) ---
+function filtrarTabla(inputId, tbodyId) {
+  const q = $("#" + inputId).val().toLowerCase();
+  $("#" + tbodyId + " tr").each(function () {
+    $(this).toggle($(this).text().toLowerCase().includes(q));
+  });
+}
+
+// Loader también al navegar entre páginas del panel (evita doble clic en la nav).
+$(document).on("click", "aside nav a", function () { _cargando(true); });
+
+// Cada página define cargarDatos() -> bool (true si la clave es válida y los
+// datos cargaron). entrar() la usa para validar la clave del login.
+async function entrar() {
+  const valor = $("#clave-input").val().trim();
+  if (!valor) { avisar("Introduce la clave de administrador.", true); return; }
+  clave = valor;
+  if (await cargarDatos()) {
+    sessionStorage.setItem("admin_api_key", clave);
+    mostrarPanel(true);
+  } else {
+    clave = "";
+  }
+}
+
+// Si ya hay sesión guardada se muestra el panel DE INMEDIATO (optimista): así
+// no aparece el login en cada navegación entre pestañas mientras se valida la
+// clave. Si la clave resultó inválida/revocada, se vuelve al login.
+if (clave) mostrarPanel(true);
+
+$(async function () {
+  if (!clave) return;
+  if (!(await cargarDatos())) {
+    sessionStorage.removeItem("admin_api_key");
+    clave = "";
+    mostrarPanel(false);
+  }
+});
+</script>
+{% block js %}{% endblock %}
+</body>
+</html>

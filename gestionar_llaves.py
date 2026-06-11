@@ -26,12 +26,12 @@ Después solo queda su hash; si se pierde, hay que generar otra.
 """
 import sys
 
-from app import seguridad
+from app.services.consumidores import consumidores
 
 
 def crear(consumidor: str, scope: str = "consumo") -> None:
     try:
-        registro = seguridad.crear_llave(consumidor, scope)
+        registro = consumidores.crear(consumidor, scope)
     except ValueError as e:
         print(f"❌ {e}")
         sys.exit(1)
@@ -47,7 +47,7 @@ def crear(consumidor: str, scope: str = "consumo") -> None:
 
 
 def listar() -> None:
-    llaves = seguridad.listar_llaves()
+    llaves = consumidores.listar()
     if not llaves:
         print("No hay API keys registradas. Crea una con: python gestionar_llaves.py crear <consumidor>")
         return
@@ -62,7 +62,7 @@ def listar() -> None:
 
 
 def revocar(identificador: str) -> None:
-    n = seguridad.revocar_llave(identificador)
+    n = consumidores.revocar(identificador)
     if n == 0:
         print(f"⚠️  No se encontró ninguna clave activa para '{identificador}'.")
         sys.exit(1)
@@ -70,7 +70,7 @@ def revocar(identificador: str) -> None:
 
 
 def main() -> None:
-    seguridad.inicializar()
+    consumidores.inicializar()
 
     if len(sys.argv) < 2:
         print(__doc__)

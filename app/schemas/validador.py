@@ -14,6 +14,10 @@ class RespuestaValidacion(BaseModel):
     document_class: str
     # Confianza del modelo (0.0 a 1.0).
     confidence: float
-    # Texto extraído por OCR del documento. Solo se llena cuando se envió la
-    # cédula del sistema (modo OCR); null en el modo simple.
+    # DEPRECADO: validar-identidad ya no usa OCR (el número se compara contra la
+    # extracción estructurada). Siempre null; se conserva para no romper a los
+    # consumidores. Para texto OCR está el endpoint /api/v1/ocr/.
     ocr: Optional[str] = None
+    # Datos extraídos del documento según su tipo (cédula o pasaporte), como
+    # diccionario. Vacío {} si el documento no es un tipo de identidad reconocido.
+    datos: dict = {}

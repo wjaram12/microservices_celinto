@@ -1,0 +1,76 @@
+"""
+Base común de los servicios que persisten en PostgreSQL.
+
+Cada servicio (APIConsumidores, ServicioPrompts, ServicioProcesadores) declara
+su DDL y hereda de ServicioBD, que le da la conexión con commit/rollback y la
+creación idempotente de su tabla — a prueba de carreras entre workers.
+"""
+import contextlib
+
+import psycopg2
+from psycopg2 import errors as pg_errors
+
+from app.core.config import settings
+
+
+class ServicioBD:
+    # DDL de la tabla del servicio (CREATE TABLE IF NOT EXISTS ...).
+    DDL: str = ""
+    # ALTERs idempotentes para columnas añadidas con el tiempo
+    # (ALTER TABLE ... ADD COLUMN IF NOT EXISTS ...).
+    ALTERS: tuple = ()
+
+    def __init__(self):
+        # Bandera para asegurar la tabla una sola vez por proceso.
+        self._tabla_lista = False
+
+    def _asegurar_tabla(self, con) -> None:
+        """
+        Crea la tabla si falta, TOLERANDO la carrera entre procesos.
+
+        `CREATE TABLE IF NOT EXISTS` no es del todo atómico: si varios workers
+        arrancan a la vez, todos ven que la tabla no existe y la intentan crear;
+        uno gana y los demás fallan con UniqueViolation sobre `pg_type`. En ese
+        caso la tabla YA existe, así que el error se ignora.
+        """
+        try:
+            with con.cursor() as cur:
+                cur.execute(self.DDL)
+                for alter in self.ALTERS:
+                    cur.execute(alter)
+            con.commit()
+        except (pg_errors.UniqueViolation, pg_errors.DuplicateTable, pg_errors.DuplicateObject):
+            con.rollback()
+
+    @contextlib.contextmanager
+    def _conectar(self):
+        """
+        Abre una conexión, hace commit al salir bien (o rollback si hay error) y
+        la cierra siempre. La primera vez en el proceso garantiza que la tabla
+        exista.
+
+        Una conexión por operación: para el volumen de este servicio es
+        suficiente y simple. Si en el futuro hay alta concurrencia, conviene un
+        pool (psycopg2.pool) o PgBouncer delante.
+        """
+        con = psycopg2.connect(settings.DATABASE_URL)
+        try:
+            if not self._tabla_lista:
+                self._asegurar_tabla(con)
+                self._tabla_lista = True
+            yield con
+            con.commit()
+        except Exception:
+            con.rollback()
+            raise
+        finally:
+            con.close()
+
+    def inicializar(self) -> None:
+        """
+        Garantiza que la tabla exista (idempotente). Se llama al arrancar el
+        servidor; sirve para fallar pronto si la base no es accesible. Los
+        servicios con siembra la sobreescriben.
+        """
+        with self._conectar():
+            pass

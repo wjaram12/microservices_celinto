@@ -1,0 +1,195 @@
+{% extends "base.html" %}
+{% block titulo %}Consumidores · Administración{% endblock %}
+{% block titulo_pagina %}🔑 Consumidores{% endblock %}
+{% block subtitulo %}API keys de los sistemas consumidores del servicio.{% endblock %}
+
+{% block contenido %}
+<div class="toolbar">
+  <input type="text" id="k-buscar" placeholder="Buscar consumidor…" oninput="filtrarTabla('k-buscar','k-cuerpo')">
+  <button class="btn-principal" onclick="abrirCrearKey()">➕ Nueva API key</button>
+</div>
+
+<div class="tabla-envoltura">
+  <table class="tabla">
+    <thead>
+      <tr>
+        <th>ID</th><th>Consumidor</th><th>Scope</th><th>Estado</th>
+        <th>Creada</th><th>Último uso</th><th class="celda-acciones">Acciones</th>
+      </tr>
+    </thead>
+    <tbody id="k-cuerpo"></tbody>
+  </table>
+</div>
+
+<!-- Modal: crear API key -->
+<div class="modal-fondo" id="modal-key">
+  <div class="modal">
+    <h3>Nueva API key</h3>
+    <p class="modal-sub">La clave se mostrará UNA sola vez al crearla.</p>
+    <label for="k-consumidor">Consumidor</label>
+    <input type="text" id="k-consumidor" placeholder="ej: ucg-posgrados">
+    <label for="k-scope">Scope</label>
+    <select id="k-scope">
+      <option value="consumo">consumo (clasificar / OCR)</option>
+      <option value="admin">admin (además, gestionar)</option>
+    </select>
+    <div class="modal-acciones">
+      <button class="btn-texto" onclick="cerrarModal('modal-key')">Cancelar</button>
+      <button class="btn-principal" onclick="crearKey()">Crear clave</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal: editar API key -->
+<div class="modal-fondo" id="modal-key-editar">
+  <div class="modal">
+    <h3>Editar API key <span id="ke-titulo"></span></h3>
+    <label for="ke-consumidor">Consumidor</label>
+    <input type="text" id="ke-consumidor">
+    <label for="ke-scope">Scope</label>
+    <select id="ke-scope">
+      <option value="consumo">consumo (clasificar / OCR)</option>
+      <option value="admin">admin (además, gestionar)</option>
+    </select>
+    <div class="modal-acciones">
+      <button class="btn-texto" onclick="cerrarModal('modal-key-editar')">Cancelar</button>
+      <button class="btn-principal" onclick="guardarKey()">💾 Guardar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal: clave recién creada (se muestra una sola vez) -->
+<div class="modal-fondo" id="modal-clave">
+  <div class="modal">
+    <h3>✅ Clave creada</h3>
+    <div id="clave-detalle"></div>
+    <div class="modal-acciones">
+      <button class="btn-principal" onclick="cerrarModal('modal-clave')">Listo, ya la copié</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block js %}
+<script>
+const API_KEYS = "/api/v1/api-keys/";
+let KEYS = {};           // id -> fila (para llenar el modal de edición)
+let keyEnEdicion = null;
+
+// Valida la clave y carga la tabla. Devuelve true si todo fue bien.
+async function cargarDatos() {
+  const { status, ok, cuerpo } = await llamar(API_KEYS);
+  if (ok) { renderizarKeys(cuerpo); return true; }
+  if (status === 401 || status === 403) {
+    avisar("Clave inválida o sin permisos de administrador.", true);
+  } else {
+    avisar((cuerpo && cuerpo.detail) || `No se pudieron cargar las claves (HTTP ${status}).`, true);
+  }
+  return false;
+}
+
+function renderizarKeys(keys) {
+  KEYS = {};
+  const $cuerpo = $("#k-cuerpo");
+  if (!keys.length) {
+    $cuerpo.html('<tr><td colspan="7" class="sin-datos">No hay API keys registradas.</td></tr>');
+    return;
+  }
+  $cuerpo.html(keys.map(k => {
+    KEYS[k.id] = k;
+    return `
+    <tr class="${k.activo ? "" : "inactivo"}">
+      <td>#${k.id}</td>
+      <td><b>${escapar(k.consumidor)}</b></td>
+      <td><span class="etiqueta ${k.scope === "admin" ? "admin" : "consumo"}">${escapar(k.scope)}</span></td>
+      <td><span class="etiqueta ${k.activo ? "activo" : "revocado"}">${k.activo ? "ACTIVA" : "REVOCADA"}</span></td>
+      <td>${escapar(k.creado_en)}</td>
+      <td>${escapar(k.ultimo_uso || "—")}</td>
+      <td class="celda-acciones">
+        <button class="btn-icono" title="Editar" onclick="abrirEditarKey(${k.id})">✏️ Editar</button>
+        <button class="btn-icono ${k.activo ? "peligro" : ""}" onclick="alternarKey(${k.id}, ${k.activo ? "false" : "true"})">
+          ${k.activo ? "⏸️ Revocar" : "▶️ Reactivar"}
+        </button>
+      </td>
+    </tr>`;
+  }).join(""));
+  filtrarTabla("k-buscar", "k-cuerpo");
+}
+
+// --- Crear ---
+function abrirCrearKey() {
+  $("#k-consumidor").val("");
+  $("#k-scope").val("consumo");
+  abrirModal("modal-key");
+}
+
+async function crearKey() {
+  const consumidor = $("#k-consumidor").val().trim();
+  const scope = $("#k-scope").val();
+  if (!consumidor) { avisar("Indica el nombre del consumidor.", true); return; }
+  const { status, ok, cuerpo } = await llamar(API_KEYS, {
+    method: "POST", body: JSON.stringify({ consumidor, scope }),
+  });
+  if (ok) {
+    cerrarModal("modal-key");
+    $("#clave-detalle").html(`
+      <div class="clave-nueva">
+        <div>Clave para <b>${escapar(cuerpo.consumidor)}</b> (scope ${escapar(cuerpo.scope)}).</div>
+        <div class="valor">${escapar(cuerpo.llave)}</div>
+        <button class="btn-suave" onclick="copiar('${escapar(cuerpo.llave)}')">📋 Copiar</button>
+        <div class="nota">⚠️ Cópiala ahora: no se volverá a mostrar.</div>
+      </div>`);
+    abrirModal("modal-clave");
+    cargarDatos();
+    return;
+  }
+  if (sesionInvalida(status)) return;
+  avisar((cuerpo && cuerpo.detail) || `No se pudo crear la clave (HTTP ${status}).`, true);
+}
+
+// --- Editar ---
+function abrirEditarKey(id) {
+  const k = KEYS[id];
+  if (!k) return;
+  keyEnEdicion = id;
+  $("#ke-titulo").text(`#${id}`);
+  $("#ke-consumidor").val(k.consumidor);
+  $("#ke-scope").val(k.scope);
+  abrirModal("modal-key-editar");
+}
+
+async function guardarKey() {
+  const consumidor = $("#ke-consumidor").val().trim();
+  const scope = $("#ke-scope").val();
+  const { status, ok, cuerpo } = await llamar(API_KEYS + keyEnEdicion, {
+    method: "PUT", body: JSON.stringify({ consumidor, scope }),
+  });
+  if (ok) {
+    cerrarModal("modal-key-editar");
+    avisar(`Clave #${keyEnEdicion} actualizada.`);
+    cargarDatos();
+    return;
+  }
+  if (sesionInvalida(status)) return;
+  avisar((cuerpo && cuerpo.detail) || `No se pudo guardar (HTTP ${status}).`, true);
+}
+
+// --- Revocar / reactivar ---
+async function alternarKey(id, activar) {
+  const reactivar = activar === true || activar === "true";
+  const { status, ok, cuerpo } = await llamar(API_KEYS + id, {
+    method: "PUT", body: JSON.stringify({ activo: reactivar }),
+  });
+  if (ok) { avisar(`Clave #${id} ${reactivar ? "reactivada" : "revocada"}.`); cargarDatos(); return; }
+  if (sesionInvalida(status)) return;
+  avisar((cuerpo && cuerpo.detail) || `No se pudo cambiar el estado (HTTP ${status}).`, true);
+}
+
+function copiar(texto) {
+  navigator.clipboard.writeText(texto).then(
+    () => avisar("Clave copiada al portapapeles."),
+    () => avisar("No se pudo copiar; selecciónala manualmente.", true),
+  );
+}
+</script>
+{% endblock %}
