@@ -488,22 +488,33 @@ function leerUmbral(texto) {
 // Procesadores publicados en Extend, cacheados tras "Cargar de Extend" (por id).
 let EXTEND_CACHE = {};
 
-async function cargarExtend(tipo, selProcId, selVerId, inpPidId) {
+async function cargarExtend(tipo, selProcId, selVerId, inpPidId, silencioso = false) {
   if (tipo !== "clasificar" && tipo !== "extraer") {
-    avisar("Solo 'clasificar' y 'extraer' tienen procesadores en Extend.", true);
-    return;
+    if (!silencioso) avisar("Solo 'clasificar' y 'extraer' tienen procesadores en Extend.", true);
+    return false;
   }
   const { status, ok, cuerpo } = await llamar(API_PROCESADORES + "extend?tipo=" + tipo);
   if (!ok) {
-    if (sesionInvalida(status)) return;
+    if (sesionInvalida(status)) return false;
     avisar((cuerpo && cuerpo.detail) || `No se pudo consultar Extend (HTTP ${status}).`, true);
-    return;
+    return false;
   }
   $("#" + selProcId).html('<option value="">—</option>' + cuerpo.map(p => {
     EXTEND_CACHE[p.id] = p;
     return `<option value="${escapar(p.id)}">${escapar(p.nombre || p.id)} (${escapar(p.id)})</option>`;
   }).join(""));
-  avisar(`${cuerpo.length} procesador(es) de Extend cargados.`);
+  if (!silencioso) avisar(`${cuerpo.length} procesador(es) de Extend cargados.`);
+  return true;
+}
+
+// Al editar un procesador que usa uno publicado: carga la lista de Extend y deja
+// preseleccionado el procesador y la versión que ya estaban guardados en base.
+async function preseleccionarExtend(tipo, pid, version) {
+  const ok = await cargarExtend(tipo, "pr-extend", "pr-version", "pr-pid", true);
+  if (!ok || !EXTEND_CACHE[pid]) return;  // el procesador ya no está publicado: se deja el id manual
+  $("#pr-extend").val(pid);
+  elegirExtend("pr-extend", "pr-version", "pr-pid");
+  if (version) $("#pr-version").val(version);
 }
 
 // Opciones fijas del select de versión. value = lo que se guarda y se envía al
@@ -601,6 +612,12 @@ function abrirEditarProc(id) {
   }
   actualizarSecciones();
   abrirModal("modal-proc");
+
+  // Si la fila usa un procesador publicado de Extend, carga la lista y deja
+  // preseleccionado el que estaba elegido (id + versión).
+  if (p.procesador_id && (p.operacion === "clasificar" || p.operacion === "extraer")) {
+    preseleccionarExtend(p.operacion, p.procesador_id, p.version);
+  }
 }
 
 async function guardarProc() {
