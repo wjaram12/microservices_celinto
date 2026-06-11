@@ -246,7 +246,7 @@ function renderCampos() {
     return `<tr>
       <td><input type="text" class="sb-clave" value="${escapar(c.clave)}" placeholder="numero_cedula"></td>
       <td>${sel}</td>
-      <td><input type="text" class="sb-desc" value="${escapar(c.descripcion)}" placeholder="Cómo reconocer este campo en el documento"></td>
+      <td><textarea class="sb-desc tabla-textarea" placeholder="Cómo reconocer este campo (todo el contexto que necesite el modelo; admite varias líneas)">${escapar(c.descripcion)}</textarea></td>
       <td class="celda-acciones"><button class="btn-icono peligro" type="button" onclick="quitarCampo(${i})">🗑️</button></td>
     </tr>`;
   }).join(""));
@@ -347,7 +347,7 @@ function renderClasifs() {
     <tr>
       <td><input type="text" class="cb-clave" value="${escapar(c.clave)}" placeholder="cedula"></td>
       <td><input type="text" class="cb-tipo" value="${escapar(c.tipo)}" placeholder="CEDULA (u 'other')"></td>
-      <td><input type="text" class="cb-desc" value="${escapar(c.descripcion)}" placeholder="Describe el documento con detalle…"></td>
+      <td><textarea class="cb-desc tabla-textarea" placeholder="Describe el documento con detalle (todo el contexto que guía al modelo; admite varias líneas)">${escapar(c.descripcion)}</textarea></td>
       <td class="celda-acciones"><button class="btn-icono peligro" type="button" onclick="quitarClasif(${i})">🗑️</button></td>
     </tr>`).join(""));
 }
