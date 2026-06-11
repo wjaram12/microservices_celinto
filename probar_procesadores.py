@@ -511,6 +511,8 @@ check("el panel referencia jQuery local (sin CDN)", 'src="/static/js/jquery.min.
 check("el panel tiene el loader global", 'id="cargador"' in r.text)
 check("el panel usa tablas con modales (layout CRM)",
       'class="tabla"' in r.text and "modal-fondo" in r.text and "<aside>" in r.text)
+check("anti-parpadeo del login al navegar (clase con-sesion antes de pintar)",
+      "con-sesion" in r.text and "html.con-sesion #acceso" in r.text)
 r = cliente.get("/static/js/jquery.min.js")
 check("jQuery vendorizado se sirve desde /static", r.status_code == 200 and "jQuery v3" in r.text[:100])
 

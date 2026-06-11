@@ -195,6 +195,12 @@
   #acceso input { text-align: center; margin-top: 8px; }
   #acceso button { width: 100%; margin-top: 18px; }
   .oculto { display: none; }
+  /* Anti-parpadeo: cuando hay sesión guardada (clase puesta en <html> por el
+     script del <head>, antes de pintar), el login no se muestra ni un frame y
+     el panel se ve desde el primer pintado. El id da más especificidad que
+     .oculto, así que vence a `#panel.oculto`. */
+  html.con-sesion #acceso { display: none; }
+  html.con-sesion #panel  { display: block; }
 
   /* ---- Snackbar ---- */
   #mensaje {
@@ -220,6 +226,17 @@
   }
   .clave-nueva .nota { font-size: .8rem; color: var(--md-on-error-container); }
 </style>
+<script>
+  // Antes de pintar nada: si hay sesión guardada, se marca el documento para
+  // que el CSS muestre el panel y oculte el login desde el PRIMER frame. Así no
+  // parpadea el login al navegar entre páginas (cada navegación es una recarga,
+  // y este script corre antes de que jQuery se descargue).
+  try {
+    if (sessionStorage.getItem("admin_api_key")) {
+      document.documentElement.className += " con-sesion";
+    }
+  } catch (e) {}
+</script>
 </head>
 <body>
 
@@ -374,10 +391,12 @@ async function entrar() {
   }
 }
 
-// Si ya hay sesión guardada se muestra el panel DE INMEDIATO (optimista): así
-// no aparece el login en cada navegación entre pestañas mientras se valida la
-// clave. Si la clave resultó inválida/revocada, se vuelve al login.
+// El panel ya se mostró sin parpadeo vía la clase `con-sesion` del <head>.
+// Aquí se fija el estado en el toggle por clases (.oculto) y se quita
+// `con-sesion`, para ceder el control: así, si la validación falla, se puede
+// volver al login (el CSS de `con-sesion` ya no fuerza el panel).
 if (clave) mostrarPanel(true);
+document.documentElement.classList.remove("con-sesion");
 
 $(async function () {
   if (!clave) return;
