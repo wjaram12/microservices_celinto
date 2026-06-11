@@ -19,7 +19,10 @@ from typing import Optional
 from psycopg2 import errors as pg_errors
 from psycopg2.extras import RealDictCursor
 
+from app.core.cache import CacheTTL
 from app.core.db import ServicioBD
+
+_cache_activas = CacheTTL(30.0)
 
 SEMILLA = [
     ("cedula", "CEDULA",
@@ -88,6 +91,7 @@ class ServicioPrompts(ServicioBD):
                         )
         except pg_errors.UniqueViolation:
             pass
+        _cache_activas.invalidar()
 
     def listar(self, solo_activos: bool = False) -> list:
         sql = "SELECT id, clave, tipo, descripcion, activo, creado_en, actualizado_en FROM clasificaciones"
@@ -98,6 +102,11 @@ class ServicioPrompts(ServicioBD):
             with con.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute(sql)
                 return [self._normalizar(f) for f in cur.fetchall()]
+
+    def listar_activas(self) -> list:
+        """Clasificaciones activas cacheadas (TTL): es lo que el clasificador
+        lee en cada inferencia (modo inline). Se invalida en cada escritura."""
+        return _cache_activas.obtener(lambda: self.listar(solo_activos=True))
 
     def obtener(self, clave: str) -> Optional[dict]:
         with self._conectar() as con:
@@ -119,6 +128,7 @@ class ServicioPrompts(ServicioBD):
                     "VALUES (%s, %s, %s, %s)",
                     (clave, self.normalizar_tipo(tipo), descripcion.strip(), bool(activo)),
                 )
+        _cache_activas.invalidar()
         return self.obtener(clave)
 
     def actualizar(
@@ -144,6 +154,7 @@ class ServicioPrompts(ServicioBD):
                         actual["clave"],
                     ),
                 )
+        _cache_activas.invalidar()
         return self.obtener(clave)
 
     def eliminar(self, clave: str) -> bool:
@@ -154,7 +165,9 @@ class ServicioPrompts(ServicioBD):
                     "DELETE FROM clasificaciones WHERE clave = %s",
                     (self.normalizar_clave(clave),),
                 )
-                return cur.rowcount > 0
+                borrada = cur.rowcount > 0
+        _cache_activas.invalidar()
+        return borrada
 
 
 prompts = ServicioPrompts()

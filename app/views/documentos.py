@@ -11,6 +11,7 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 from app.schemas.clasificador import RespuestaClasificacion
 from app.schemas.ocr import RespuestaOCR
+from app.schemas.senescyt import RespuestaRegistroSenescyt
 from app.schemas.validador import RespuestaValidacion
 from app.services import documentos as srv
 from app.services.documentos import documentos
@@ -165,5 +166,38 @@ async def validar_documento(
         document_class=resultado["clase_detectada"],
         confidence=resultado["confianza"],
         ocr=resultado["ocr"],
+        datos=resultado["datos"],
+    )
+
+
+@api.post("/validaciones/validar-registro-senescyt/", response_model=RespuestaRegistroSenescyt, tags=["Validadores"])
+async def validar_registro_senescyt(file: UploadFile = File(...)):
+    """Valida que el documento sea un registro de título de la SENESCYT y, si lo
+    es, devuelve la información extraída por su extractor personalizado."""
+    contenido = await leer_archivo(file)
+
+    try:
+        resultado = await documentos.validar_registro_senescyt(contenido, file.content_type, file.filename or "")
+    except (ErrorDeArchivo, ErrorDeValidacion) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except ErrorDeProveedor as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    except Exception:
+        logger.exception("Error procesando el documento en /validaciones/validar-registro-senescyt/")
+        raise HTTPException(status_code=500, detail="Error interno al procesar el documento.")
+
+    if resultado["es_valido"]:
+        mensaje = "Registro SENESCYT validado; información extraída."
+    elif resultado["es_senescyt"]:
+        mensaje = ("El documento parece un registro SENESCYT, pero no se pudo leer "
+                   "el número de registro; revisa la calidad del documento.")
+    else:
+        mensaje = "El documento no fue reconocido como un registro de título de la SENESCYT."
+
+    return RespuestaRegistroSenescyt(
+        result=resultado["es_valido"],
+        message=mensaje,
+        document_class=resultado["clase_detectada"],
+        confidence=resultado["confianza"],
         datos=resultado["datos"],
     )

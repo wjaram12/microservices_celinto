@@ -29,6 +29,8 @@ SEMILLA = [
      "Valida un documento de identidad: clasifica, extrae campos y compara la cédula."),
     ("ocr", "/api/v1/ocr/",
      "Extrae el texto del documento (OCR) con búsqueda opcional de un término."),
+    ("validar-registro-senescyt", "/api/v1/validaciones/validar-registro-senescyt/",
+     "Valida un registro de título de la SENESCYT: clasifica y extrae su información."),
 ]
 
 
@@ -76,6 +78,18 @@ class ServicioRutas(ServicioBD):
                             "INSERT INTO rutas (clave, url, descripcion) VALUES (%s, %s, %s)",
                             SEMILLA,
                         )
+        except pg_errors.UniqueViolation:
+            pass
+        self._asegurar_rutas_nuevas()
+
+    def _asegurar_rutas_nuevas(self) -> None:
+        """Da de alta (idempotente) las rutas de la semilla que falten en bases ya
+        existentes (p.ej. validar-registro-senescyt)."""
+        try:
+            existentes = {r["clave"] for r in self.listar()}
+            for clave, url, desc in SEMILLA:
+                if clave not in existentes:
+                    self.crear(clave, url, desc)
         except pg_errors.UniqueViolation:
             pass
 

@@ -23,6 +23,7 @@ from app.services.prompts import prompts
 LONGITUD_CEDULA = 10
 CLASE_CEDULA = "CEDULA"
 CLASE_PASAPORTE = "PASAPORTE"
+CLASE_SENESCYT = "REGISTRO_SENESCYT"
 TIPOS_IDENTIDAD = {CLASE_CEDULA, CLASE_PASAPORTE}
 FORMATOS_ACEPTADOS = {"application/pdf", "image/jpeg", "image/png"}
 MAX_BYTES = 10 * 1024 * 1024
@@ -31,6 +32,7 @@ PATRON_CEDULA = re.compile(r"\b\d{10}\b")
 RUTA_CLASIFICAR = "clasificar"
 RUTA_VALIDAR = "validar-identidad"
 RUTA_OCR = "ocr"
+RUTA_SENESCYT = "validar-registro-senescyt"
 
 CLASES_RECHAZADAS = {"OTROS", "OTHER", "DESCONOCIDO", "DOCUMENTO_DESCONOCIDO"}
 
@@ -154,6 +156,21 @@ def numero_en_datos(datos: dict) -> str:
     return normalizar_cedula(valor_en_datos(datos, _CLAVES_NUMERO))
 
 
+# Claves bajo las que puede venir el número de registro de un título SENESCYT.
+# Es el dato que DEFINE a un registro; sin él, no se da por válido.
+_CLAVES_REGISTRO = (
+    "numero_registro", "num_registro", "registro",
+    "numero_registro_senescyt", "numero_acta",
+)
+
+
+def registro_senescyt_en_datos(datos: dict) -> str:
+    """Número de registro SENESCYT entre los campos extraídos ('' si no aparece
+    bajo ninguna clave conocida)."""
+    valor = valor_en_datos(datos, _CLAVES_REGISTRO)
+    return str(valor or "").strip()
+
+
 def cedula_es_valida(numero: str) -> bool:
     """Verifica una cédula ecuatoriana con el dígito verificador (módulo 10)."""
     if len(numero) != LONGITUD_CEDULA or not numero.isdigit():
@@ -184,7 +201,7 @@ class ServicioDocumentos:
         activas en la base. Garantiza una clase de descarte 'other' (Extend la
         exige) y que los id sean únicos.
         """
-        activos = prompts.listar(solo_activos=True)
+        activos = prompts.listar_activas()
         descarte = [p for p in activos if p["tipo"].lower() in TIPOS_DESCARTE]
         positivas = [p for p in activos if p["tipo"].lower() not in TIPOS_DESCARTE]
 
@@ -338,6 +355,44 @@ class ServicioDocumentos:
                 resultado["coincide"] = False
 
         return resultado
+
+    async def validar_registro_senescyt(
+        self,
+        contenido: bytes,
+        mime_type: str,
+        nombre: str = "",
+    ) -> dict:
+        """
+        Valida que el documento sea un registro de título de la SENESCYT en DOS
+        pasos: (1) el clasificador lo reconoce como REGISTRO_SENESCYT con
+        confianza suficiente, y (2) la extracción trae el número de registro (el
+        dato que define a un registro). Solo si ambos se cumplen es válido. Usa
+        clasificador + extractor (sin OCR); el extractor se configura por ruta en
+        la tabla `procesadores`.
+        """
+        preprocesar(contenido, mime_type)
+        file_id = await extend.subir_archivo(contenido, mime_type, nombre)
+        clase, confianza = await self._clasificar_archivo(file_id, RUTA_SENESCYT)
+        umbral = procesadores.umbral_clasificacion(RUTA_SENESCYT)
+
+        # Paso 1: el clasificador lo reconoce como registro SENESCYT.
+        es_senescyt = clase == CLASE_SENESCYT and confianza >= umbral
+
+        datos = {}
+        if es_senescyt:
+            datos = await self._extraer_datos(RUTA_SENESCYT, clase, file_id)
+
+        # Paso 2: la extracción confirma el número de registro.
+        tiene_registro = bool(registro_senescyt_en_datos(datos))
+        es_valido = es_senescyt and tiene_registro
+
+        return {
+            "clase_detectada": clase,
+            "confianza": confianza,
+            "es_senescyt": es_senescyt,
+            "es_valido": es_valido,
+            "datos": datos,
+        }
 
 
 documentos = ServicioDocumentos()

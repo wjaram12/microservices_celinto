@@ -217,6 +217,8 @@ class Cur:
 
 
 class Con:
+    closed = 0
+
     def cursor(self, cursor_factory=None):
         return Cur(cursor_factory is not None)
 
@@ -231,6 +233,27 @@ class Con:
 
 
 psycopg2.connect = lambda *a, **k: Con()
+
+
+# El pool real de psycopg2 inspecciona detalles internos de la conexión
+# (info.transaction_status, etc.) que el mock no tiene; lo reemplazamos por un
+# pool trivial que entrega/recibe la conexión simulada. Así se ejercita el
+# código de ServicioBD (getconn/putconn/commit/rollback) sin esas internas.
+import psycopg2.pool  # noqa: E402
+
+
+class FakePool:
+    def __init__(self, *a, **k):
+        pass
+
+    def getconn(self):
+        return Con()
+
+    def putconn(self, con, close=False):
+        pass
+
+
+psycopg2.pool.ThreadedConnectionPool = FakePool
 
 
 # ---------- Extend (httpx) simulado, con captura de bodies ----------
@@ -520,8 +543,9 @@ check("jQuery vendorizado se sirve desde /static", r.status_code == 200 and "jQu
 # ================== FASE 8: CRUD de rutas (URLs) y su unión con procesadores ==================
 print("\n=== Fase 8: CRUD de rutas y unión rutas <-> procesadores ===")
 r = cliente.get("/api/v1/rutas/", headers=A)
-check("listar rutas -> 200 con las 3 sembradas",
-      r.status_code == 200 and {x["clave"] for x in r.json()} == {"clasificar", "validar-identidad", "ocr"})
+check("listar rutas -> 200 con las rutas sembradas",
+      r.status_code == 200 and
+      {"clasificar", "validar-identidad", "ocr", "validar-registro-senescyt"} <= {x["clave"] for x in r.json()})
 check("consumo no puede listar rutas -> 403",
       cliente.get("/api/v1/rutas/", headers=H).status_code == 403)
 nueva = {"clave": "verificar-titulo", "url": "/api/v1/titulos/verificar/",
@@ -658,6 +682,78 @@ check("cédula numérica inválida sigue dando 400 (fail-fast)",
                    data={"cedula_sistema": "1234567890"}, headers=H).status_code == 400)
 
 # Restaurar el mock para no contaminar otras corridas.
+MOCK_CLASIFICACION.update({"type": "CEDULA", "confidence": 0.95})
+MOCK_EXTRACCION.clear()
+MOCK_EXTRACCION.update({"numero_cedula": " 171-003.4065 ", "apellidos": "PEREZ", "nombres": "JUAN"})
+
+
+# ================== FASE 11: cache de config (TTL + invalidación) ==================
+print("\n=== Fase 11: cache de configuración (pool + TTL) ===")
+from app.core.cache import CacheTTL  # noqa: E402
+_n = {"v": 0}
+def _cargar():
+    _n["v"] += 1
+    return _n["v"]
+c = CacheTTL(ttl_segundos=60)
+check("primera lectura carga del origen", c.obtener(_cargar) == 1)
+check("segunda lectura usa el cache (no recarga)", c.obtener(_cargar) == 1 and _n["v"] == 1)
+c.invalidar()
+check("tras invalidar, recarga", c.obtener(_cargar) == 2 and _n["v"] == 2)
+
+# Invalidación end-to-end: editar un procesador se refleja en el resolutor.
+procesadores.actualizar(id_de(RC, "clasificar"), umbral=0.5, tocar_umbral=True)
+check("escribir invalida el cache (el resolutor ve el cambio)",
+      abs(procesadores.umbral_clasificacion(RC) - 0.5) < 1e-9)
+procesadores.actualizar(id_de(RC, "clasificar"), umbral=0.85, tocar_umbral=True)
+check("el pool reemplaza la conexión-por-operación",
+      type(__import__("app.core.db", fromlist=["_obtener_pool"])._obtener_pool()).__name__ == "FakePool")
+
+
+# ================== FASE 12: ruta validar-registro-senescyt ==================
+print("\n=== Fase 12: ruta validar-registro-senescyt (extractor personalizado) ===")
+rutas_cat = {x["clave"] for x in cliente.get("/api/v1/rutas/", headers=A).json()}
+check("la ruta validar-registro-senescyt está en el catálogo",
+      "validar-registro-senescyt" in rutas_cat)
+procs_sen = [p for p in cliente.get("/api/v1/procesadores/", headers=A).json()
+             if p["ruta"] == "validar-registro-senescyt"]
+check("tiene su clasificador y su extractor",
+      {(p["operacion"], p["clase"]) for p in procs_sen}
+      == {("clasificar", ""), ("extraer", "REGISTRO_SENESCYT")})
+
+MOCK_CLASIFICACION.update({"type": "REGISTRO_SENESCYT", "confidence": 0.96})
+MOCK_EXTRACCION.clear()
+MOCK_EXTRACCION.update({"numero_registro": "1234-2026-ABC", "titulo": "Magíster en Educación",
+                        "institucion": "Universidad Casa Grande"})
+reiniciar_capturas()
+r = cliente.post("/api/v1/validaciones/validar-registro-senescyt/", files=ARCHIVO, headers=H)
+check("validar-registro-senescyt -> 200", r.status_code == 200, r.text[:300])
+d = r.json() if r.status_code == 200 else {}
+check("reconoce el registro (result True)", d.get("result") is True)
+check("devuelve los datos extraídos",
+      (d.get("datos") or {}).get("numero_registro") == "1234-2026-ABC")
+cls = CAPTURAS["/classify"][-1].get("config", {}).get("classifications", [])
+check("clasifica con las clasificaciones propias de la ruta",
+      any(c.get("type") == "REGISTRO_SENESCYT" for c in cls))
+ext = CAPTURAS["/extract"][-1].get("config", {}).get("schema", {}).get("properties", {})
+check("extrae con el esquema SENESCYT", "numero_registro" in ext)
+
+# Paso 2: reconocido como SENESCYT pero SIN número de registro -> no válido.
+MOCK_EXTRACCION.clear()
+MOCK_EXTRACCION.update({"titulo": "Magíster", "institucion": "UCG"})
+r = cliente.post("/api/v1/validaciones/validar-registro-senescyt/", files=ARCHIVO, headers=H)
+check("reconocido pero sin número de registro -> result False",
+      r.status_code == 200 and r.json().get("result") is False, r.text[:200])
+check("el mensaje avisa que falta el número de registro",
+      "número de registro" in (r.json().get("message") or ""))
+MOCK_EXTRACCION.clear()
+MOCK_EXTRACCION.update({"numero_registro": "1234-2026-ABC", "titulo": "Magíster en Educación",
+                        "institucion": "Universidad Casa Grande"})
+
+MOCK_CLASIFICACION.update({"type": "CEDULA", "confidence": 0.97})
+r = cliente.post("/api/v1/validaciones/validar-registro-senescyt/", files=ARCHIVO, headers=H)
+check("documento ajeno -> result False y datos vacíos",
+      r.status_code == 200 and r.json().get("result") is False and r.json().get("datos") == {})
+
 MOCK_CLASIFICACION.update({"type": "CEDULA", "confidence": 0.95})
 MOCK_EXTRACCION.clear()
 MOCK_EXTRACCION.update({"numero_cedula": " 171-003.4065 ", "apellidos": "PEREZ", "nombres": "JUAN"})

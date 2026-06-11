@@ -33,6 +33,7 @@ from typing import Callable, Optional
 from psycopg2 import errors as pg_errors
 from psycopg2.extras import Json, RealDictCursor
 
+from app.core.cache import CacheTTL
 from app.core.db import ServicioBD
 from app.services.errores import ErrorDeValidacion
 from app.services.extend import extend
@@ -44,6 +45,11 @@ MODOS_VALIDOS = {"id", "inline"}
 UMBRAL_DEFECTO = 0.85
 
 _TIPO_EXTEND = {"clasificar": "CLASSIFY", "extraer": "EXTRACT"}
+
+# Cache de las filas activas (la config que leen los resolutores en cada
+# petición). Se invalida en cada escritura y caduca a los TTL_CONFIG segundos.
+TTL_CONFIG = 30.0
+_cache_filas = CacheTTL(TTL_CONFIG)
 
 OTRO_POR_DEFECTO = {
     "id": "otros_descarte",
@@ -107,13 +113,42 @@ _ESQUEMA_PASAPORTE = {
     },
 }
 
+_ESQUEMA_SENESCYT = {
+    "type": "object",
+    "properties": {
+        "numero_registro": _campo("Número de registro del título en la SENESCYT."),
+        "nombres_apellidos": _campo("Nombres y apellidos del titular."),
+        "numero_identificacion": _campo("Número de identificación (cédula o pasaporte) del titular."),
+        "titulo": _campo("Nombre del título obtenido."),
+        "institucion": _campo("Institución de Educación Superior que otorgó el título."),
+        "tipo": _campo("Tipo o nivel del título (tercer nivel, cuarto nivel, etc.)."),
+        "area_conocimiento": _campo("Área o campo de conocimiento."),
+        "fecha_registro": _campo("Fecha de registro del título."),
+    },
+}
+
+_CLASIF_SENESCYT = {"classifications": [
+    {"id": "registro_senescyt", "type": "REGISTRO_SENESCYT",
+     "description": ("Registro de título de la SENESCYT (Ecuador): documento que "
+                     "certifica el registro de un título académico, con número de "
+                     "registro, titular, institución de educación superior y título.")},
+    {"id": "otros", "type": "other",
+     "description": "Cualquier otro documento que no sea un registro de título de la SENESCYT."},
+]}
+
 SEMILLA = [
     ("clasificar", "clasificar", "", "inline", None, None, None, UMBRAL_DEFECTO),
     ("validar-identidad", "clasificar", "", "inline", None, None, None, UMBRAL_DEFECTO),
     ("validar-identidad", "extraer", "CEDULA", "inline", None, None, _ESQUEMA_CEDULA, None),
     ("validar-identidad", "extraer", "PASAPORTE", "inline", None, None, _ESQUEMA_PASAPORTE, None),
+    ("validar-registro-senescyt", "clasificar", "", "inline", None, None, _CLASIF_SENESCYT, UMBRAL_DEFECTO),
+    ("validar-registro-senescyt", "extraer", "REGISTRO_SENESCYT", "inline", None, None, _ESQUEMA_SENESCYT, None),
     ("ocr", "parse", "", "inline", None, None, {"target": "markdown"}, None),
 ]
+
+# Filas de la semilla que pertenecen a la ruta validar-registro-senescyt. Se
+# usan para darla de alta de forma idempotente en bases ya existentes.
+_SEMILLA_SENESCYT = [s for s in SEMILLA if s[0] == "validar-registro-senescyt"]
 
 _COLUMNAS = ("id, ruta, operacion, clase, modo, procesador_id, version, esquema, "
              "umbral, activo, creado_en, actualizado_en")
@@ -230,6 +265,20 @@ class ServicioProcesadores(ServicioBD):
                         )
         except pg_errors.UniqueViolation:
             pass
+        self._asegurar_filas_senescyt()
+        _cache_filas.invalidar()
+
+    def _asegurar_filas_senescyt(self) -> None:
+        """Da de alta (idempotente) las filas de la ruta validar-registro-senescyt
+        en bases que ya existían antes de añadir esa ruta. No las re-crea si ya
+        están; tolera la carrera entre workers."""
+        try:
+            existentes = {(f["ruta"], f["operacion"], f["clase"]) for f in self.listar()}
+            for (ru, op, cl, mo, pid, ver, esq, umb) in _SEMILLA_SENESCYT:
+                if (ru, op, cl) not in existentes:
+                    self.crear(ru, op, cl, mo, pid, ver, esq, umb)
+        except pg_errors.UniqueViolation:
+            pass
 
     def listar(self, solo_activos: bool = False) -> list:
         sql = f"SELECT {_COLUMNAS} FROM procesadores"
@@ -270,7 +319,9 @@ class ServicioProcesadores(ServicioBD):
                     (ruta, operacion, clase, modo, procesador_id, version,
                      Json(esquema) if esquema is not None else None, umbral, bool(activo)),
                 )
-                return self._normalizar(cur.fetchone())
+                fila = self._normalizar(cur.fetchone())
+        _cache_filas.invalidar()
+        return fila
 
     def actualizar(self, id_proc: int,
                    ruta: Optional[str] = None,
@@ -327,6 +378,7 @@ class ServicioProcesadores(ServicioBD):
                     (n_ruta, n_operacion, n_clase, n_modo, n_procesador, n_version,
                      Json(n_esquema) if n_esquema is not None else None, n_umbral, n_activo, id_proc),
                 )
+        _cache_filas.invalidar()
         return self.obtener_por_id(id_proc)
 
     def eliminar(self, id_proc: int) -> bool:
@@ -334,18 +386,21 @@ class ServicioProcesadores(ServicioBD):
         with self._conectar() as con:
             with con.cursor() as cur:
                 cur.execute("DELETE FROM procesadores WHERE id = %s", (id_proc,))
-                return cur.rowcount > 0
+                borrada = cur.rowcount > 0
+        _cache_filas.invalidar()
+        return borrada
+
+    def _filas_activas(self) -> list:
+        """Todas las filas activas, cacheadas (TTL_CONFIG). Es lo que consultan
+        los resolutores en cada petición; evita golpear la BD cada vez."""
+        return _cache_filas.obtener(lambda: self.listar(solo_activos=True))
 
     def _obtener_activa(self, ruta: str, operacion: str, clase: str) -> Optional[dict]:
-        """Fila activa para (ruta, operacion, clase), o None si no hay ninguna."""
-        with self._conectar() as con:
-            with con.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute(
-                    f"SELECT {_COLUMNAS} FROM procesadores "
-                    "WHERE ruta = %s AND operacion = %s AND clase = %s AND activo = TRUE",
-                    (ruta, operacion, clase),
-                )
-                return self._normalizar(cur.fetchone())
+        """Fila activa para (ruta, operacion, clase) desde el cache, o None."""
+        for fila in self._filas_activas():
+            if fila["ruta"] == ruta and fila["operacion"] == operacion and fila["clase"] == clase:
+                return fila
+        return None
 
     @staticmethod
     def _ref_procesador(fila: dict) -> dict:
