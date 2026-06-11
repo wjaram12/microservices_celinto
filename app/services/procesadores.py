@@ -30,6 +30,7 @@ fragmento de body que ServicioDocumentos inyecta en la llamada a Extend.
 """
 from typing import Callable, Optional
 
+from psycopg2 import errors as pg_errors
 from psycopg2.extras import Json, RealDictCursor
 
 from app.core.db import ServicioBD
@@ -233,21 +234,25 @@ class ServicioProcesadores(ServicioBD):
 
     def inicializar(self) -> None:
         """Crea la tabla (idempotente) y la siembra si está vacía."""
-        with self._conectar() as con:
-            with con.cursor() as cur:
-                # Migración (idempotente): validar-identidad ya no usa OCR; su
-                # fila 'parse' sembrada en versiones anteriores se retira.
-                cur.execute(
-                    "DELETE FROM procesadores WHERE ruta = 'validar-identidad' AND operacion = 'parse'"
-                )
-                cur.execute("SELECT COUNT(*) FROM procesadores")
-                if cur.fetchone()[0] == 0:
-                    cur.executemany(
-                        "INSERT INTO procesadores (ruta, operacion, clase, modo, procesador_id, version, esquema, umbral) "
-                        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
-                        [(ru, op, cl, mo, pid, ver, Json(esq) if esq is not None else None, umb)
-                         for (ru, op, cl, mo, pid, ver, esq, umb) in SEMILLA],
+        try:
+            with self._conectar() as con:
+                with con.cursor() as cur:
+                    # Migración (idempotente): validar-identidad ya no usa OCR; su
+                    # fila 'parse' sembrada en versiones anteriores se retira.
+                    cur.execute(
+                        "DELETE FROM procesadores WHERE ruta = 'validar-identidad' AND operacion = 'parse'"
                     )
+                    cur.execute("SELECT COUNT(*) FROM procesadores")
+                    if cur.fetchone()[0] == 0:
+                        cur.executemany(
+                            "INSERT INTO procesadores (ruta, operacion, clase, modo, procesador_id, version, esquema, umbral) "
+                            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                            [(ru, op, cl, mo, pid, ver, Json(esq) if esq is not None else None, umb)
+                             for (ru, op, cl, mo, pid, ver, esq, umb) in SEMILLA],
+                        )
+        except pg_errors.UniqueViolation:
+            # Carrera entre workers al arrancar: otro proceso sembró primero.
+            pass
 
     # --- CRUD ---
 

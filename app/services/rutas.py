@@ -17,6 +17,7 @@ el mapeo clave -> URL para el panel.
 """
 from typing import Optional
 
+from psycopg2 import errors as pg_errors
 from psycopg2.extras import RealDictCursor
 
 from app.core.db import ServicioBD
@@ -66,14 +67,20 @@ class ServicioRutas(ServicioBD):
 
     def inicializar(self) -> None:
         """Crea la tabla (idempotente) y la siembra si está vacía."""
-        with self._conectar() as con:
-            with con.cursor() as cur:
-                cur.execute("SELECT COUNT(*) FROM rutas")
-                if cur.fetchone()[0] == 0:
-                    cur.executemany(
-                        "INSERT INTO rutas (clave, url, descripcion) VALUES (%s, %s, %s)",
-                        SEMILLA,
-                    )
+        try:
+            with self._conectar() as con:
+                with con.cursor() as cur:
+                    cur.execute("SELECT COUNT(*) FROM rutas")
+                    if cur.fetchone()[0] == 0:
+                        cur.executemany(
+                            "INSERT INTO rutas (clave, url, descripcion) VALUES (%s, %s, %s)",
+                            SEMILLA,
+                        )
+        except pg_errors.UniqueViolation:
+            # Carrera entre workers (gunicorn/uvicorn con varios procesos): todos
+            # ven la tabla vacía y siembran a la vez; el primero gana y para los
+            # demás la siembra YA está hecha — no es un error real.
+            pass
 
     def listar(self, solo_activos: bool = False) -> list:
         sql = "SELECT id, clave, url, descripcion, activo, creado_en, actualizado_en FROM rutas"

@@ -16,6 +16,7 @@ Lo administra la view adm_prompts (página /admin/prompts y endpoints
 """
 from typing import Optional
 
+from psycopg2 import errors as pg_errors
 from psycopg2.extras import RealDictCursor
 
 from app.core.db import ServicioBD
@@ -76,14 +77,18 @@ class ServicioPrompts(ServicioBD):
 
     def inicializar(self) -> None:
         """Crea la tabla (idempotente) y la siembra si está vacía."""
-        with self._conectar() as con:
-            with con.cursor() as cur:
-                cur.execute("SELECT COUNT(*) FROM clasificaciones")
-                if cur.fetchone()[0] == 0:
-                    cur.executemany(
-                        "INSERT INTO clasificaciones (clave, tipo, descripcion) VALUES (%s, %s, %s)",
-                        SEMILLA,
-                    )
+        try:
+            with self._conectar() as con:
+                with con.cursor() as cur:
+                    cur.execute("SELECT COUNT(*) FROM clasificaciones")
+                    if cur.fetchone()[0] == 0:
+                        cur.executemany(
+                            "INSERT INTO clasificaciones (clave, tipo, descripcion) VALUES (%s, %s, %s)",
+                            SEMILLA,
+                        )
+        except pg_errors.UniqueViolation:
+            # Carrera entre workers al arrancar: otro proceso sembró primero.
+            pass
 
     def listar(self, solo_activos: bool = False) -> list:
         sql = "SELECT id, clave, tipo, descripcion, activo, creado_en, actualizado_en FROM clasificaciones"
