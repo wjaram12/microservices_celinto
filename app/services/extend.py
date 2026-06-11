@@ -22,10 +22,7 @@ from app.services.errores import ErrorDeProveedor
 
 logger = logging.getLogger(__name__)
 
-# URL base de la API (existen endpoints regionales: api.us2.extend.app, etc.).
 EXTEND_BASE_URL = "https://api.extend.ai"
-# Se fija la versión para que una actualización de Extend no cambie el formato
-# de las respuestas sin previo aviso. No son secretos: no van al .env.
 EXTEND_API_VERSION = "2026-02-09"
 
 
@@ -44,7 +41,6 @@ class ClienteExtend:
                     "Authorization": f"Bearer {settings.EXTEND_API_KEY}",
                     "x-extend-api-version": EXTEND_API_VERSION,
                 },
-                # Los endpoints síncronos de Extend pueden tardar hasta 5 minutos.
                 timeout=httpx.Timeout(300.0, connect=10.0),
             )
         return self._cliente
@@ -136,16 +132,16 @@ class ClienteExtend:
     async def listar_procesadores(self, tipo_extend: str) -> list:
         """
         GET /processors?type=... siguiendo la paginación. Devuelve la lista
-        cruda de procesadores publicados en Extend Studio.
+        cruda de procesadores publicados en Extend Studio. La lista puede venir
+        bajo la clave 'processors' o 'data'.
         """
         salida: list = []
         token: Optional[str] = None
-        for _ in range(50):  # tope de páginas por seguridad
+        for _ in range(50):
             params = {"type": tipo_extend, "maxPageSize": 100}
             if token:
                 params["nextPageToken"] = token
             datos = await self._llamar("GET", "/processors", params=params)
-            # La lista puede venir bajo 'processors' (o 'data' en algunas versiones).
             salida.extend(datos.get("processors") or datos.get("data") or [])
             token = datos.get("nextPageToken")
             if not token:
@@ -185,5 +181,4 @@ class ClienteExtend:
         )
 
 
-# Instancia única del cliente (reutiliza la conexión HTTP entre peticiones).
 extend = ClienteExtend()

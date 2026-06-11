@@ -22,7 +22,6 @@ from psycopg2.extras import RealDictCursor
 
 from app.core.db import ServicioBD
 
-# Rutas reales del servicio con las que se siembra la tabla la primera vez.
 SEMILLA = [
     ("clasificar", "/api/v1/clasificar/",
      "Clasifica un documento y devuelve clase, confianza y validez."),
@@ -66,7 +65,8 @@ class ServicioRutas(ServicioBD):
         return "-".join((clave or "").strip().lower().split())
 
     def inicializar(self) -> None:
-        """Crea la tabla (idempotente) y la siembra si está vacía."""
+        """Crea la tabla (idempotente) y la siembra si está vacía. Tolera la
+        carrera entre workers al arrancar."""
         try:
             with self._conectar() as con:
                 with con.cursor() as cur:
@@ -77,9 +77,6 @@ class ServicioRutas(ServicioBD):
                             SEMILLA,
                         )
         except pg_errors.UniqueViolation:
-            # Carrera entre workers (gunicorn/uvicorn con varios procesos): todos
-            # ven la tabla vacía y siembran a la vez; el primero gana y para los
-            # demás la siembra YA está hecha — no es un error real.
             pass
 
     def listar(self, solo_activos: bool = False) -> list:
@@ -164,5 +161,4 @@ class ServicioRutas(ServicioBD):
                 return cur.rowcount > 0
 
 
-# Instancia única del servicio.
 rutas = ServicioRutas()

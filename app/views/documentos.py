@@ -38,7 +38,6 @@ async def leer_archivo(file: UploadFile) -> bytes:
     try:
         return await file.read()
     except Exception:
-        # Ej.: el cliente cortó la conexión a mitad de la subida.
         logger.exception("No se pudo leer el archivo subido")
         raise HTTPException(status_code=400, detail="No se pudo leer el archivo subido.")
 
@@ -53,17 +52,11 @@ async def clasificar_documento(file: UploadFile = File(...)):
     except ErrorDeArchivo as e:
         raise HTTPException(status_code=400, detail=str(e))
     except ErrorDeProveedor as e:
-        # El proveedor (Extend) falló: 502 para distinguirlo de un error interno.
         raise HTTPException(status_code=502, detail=str(e))
     except Exception:
-        # El detalle completo va al log del servidor; al cliente solo le llega
-        # un mensaje genérico para no exponer información interna.
         logger.exception("Error procesando el documento en /clasificar/")
         raise HTTPException(status_code=500, detail="Error interno al procesar el documento.")
 
-    # Cuando no es válido hay dos causas distintas y el mensaje debe decir
-    # cuál fue: una clase rechazada puede venir con confianza altísima
-    # (ej. "OTROS al 99%") y ahí "confianza insuficiente" sería mentira.
     if resultado["es_valido"]:
         mensaje = "Documento procesado y clasificado con éxito."
     elif resultado["clase_detectada"] in srv.CLASES_RECHAZADAS:
@@ -153,12 +146,10 @@ async def validar_documento(
         logger.exception("Error procesando el documento en /validaciones/validar-identidad/")
         raise HTTPException(status_code=500, detail="Error interno al procesar el documento.")
 
-    # El mensaje depende del tipo de documento y del modo en que se usó.
     clase = resultado["clase_detectada"]
     if not resultado["es_identidad"]:
         mensaje = "El documento no fue reconocido como cédula ni pasaporte."
     elif resultado["identificacion_sistema"] is None:
-        # Modo simple: documento de identidad reconocido, datos extraídos.
         mensaje = f"Documento reconocido como {clase}; datos extraídos."
     elif resultado["identificacion_documento"] is None:
         mensaje = "No se pudo extraer un número de identificación del documento."

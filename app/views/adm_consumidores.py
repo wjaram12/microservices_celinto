@@ -22,8 +22,6 @@ api = APIRouter()
 paginas = APIRouter()
 
 
-# --- Página ---
-
 @paginas.get("/admin/consumidores", include_in_schema=False)
 def pagina(request: Request):
     """
@@ -34,8 +32,6 @@ def pagina(request: Request):
         request, "consumidores/index.html", {"pagina": "consumidores"}
     )
 
-
-# --- API (scope admin) ---
 
 @api.get("/api-keys/", response_model=List[APIKeyRespuesta], tags=["API Keys (admin)"])
 def listar_api_keys(_admin: dict = Depends(requiere_admin)):

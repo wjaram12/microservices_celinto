@@ -41,16 +41,10 @@ from app.services.rutas import rutas
 OPERACIONES_VALIDAS = {"clasificar", "extraer", "parse"}
 MODOS_VALIDOS = {"id", "inline"}
 
-# Confianza mínima (0..1) para dar por válida una clasificación cuando la fila
-# de 'clasificar' no define una propia (columna `umbral`).
 UMBRAL_DEFECTO = 0.85
 
-# Mapeo de nuestras operaciones a los tipos de procesador de Extend. OJO: Extend
-# no tiene tipo "OCR/parse"; el parseo se configura por target, sin procesador.
 _TIPO_EXTEND = {"clasificar": "CLASSIFY", "extraer": "EXTRACT"}
 
-# Clase de descarte por defecto: Extend exige SIEMPRE una clase 'other' al
-# clasificar. Se añade cuando una lista de clasificaciones no la trae.
 OTRO_POR_DEFECTO = {
     "id": "otros_descarte",
     "type": "other",
@@ -63,7 +57,8 @@ OTRO_POR_DEFECTO = {
 
 def _normalizar_clasificaciones(lista: list) -> list:
     """Normaliza las clasificaciones propias de una fila ('other' en minúsculas,
-    como exige Extend) y garantiza la clase de descarte."""
+    como exige Extend) y garantiza la clase de descarte 'other' que Extend
+    exige siempre."""
     salida = []
     tiene_otro = False
     for c in lista:
@@ -81,8 +76,6 @@ def _normalizar_clasificaciones(lista: list) -> list:
     return salida
 
 
-# JSON Schemas de extracción con los que se siembra la tabla. Las descripciones
-# guían al modelo de extracción.
 def _campo(desc: str) -> dict:
     return {"type": ["string", "null"], "description": desc}
 
@@ -114,11 +107,6 @@ _ESQUEMA_PASAPORTE = {
     },
 }
 
-# Filas con las que se siembra la tabla la primera vez, una por (ruta, operación,
-# clase). Reproduce el comportamiento por defecto: /clasificar usa SOLO su
-# clasificador; /validar-identidad usa SOLO clasificador + extractores (sin OCR:
-# el número se compara contra la extracción estructurada); /ocr usa el parse.
-#   (ruta, operacion, clase, modo, procesador_id, version, esquema, umbral)
 SEMILLA = [
     ("clasificar", "clasificar", "", "inline", None, None, None, UMBRAL_DEFECTO),
     ("validar-identidad", "clasificar", "", "inline", None, None, None, UMBRAL_DEFECTO),
@@ -151,17 +139,11 @@ class ServicioProcesadores(ServicioBD):
             UNIQUE (ruta, operacion, clase)
         )
     """
-    # Columnas añadidas con el tiempo (idempotente). NOTA: si la tabla es
-    # anterior a la columna `ruta`, conserva su UNIQUE(operacion, clase) viejo;
-    # conviene recrearla (DROP TABLE procesadores) para tomar el nuevo
-    # UNIQUE(ruta, operacion, clase) y re-sembrar por ruta.
     ALTERS = (
         "ALTER TABLE procesadores ADD COLUMN IF NOT EXISTS umbral REAL",
         "ALTER TABLE procesadores ADD COLUMN IF NOT EXISTS version TEXT",
         "ALTER TABLE procesadores ADD COLUMN IF NOT EXISTS ruta TEXT NOT NULL DEFAULT ''",
     )
-
-    # --- Normalización y validación ---
 
     @staticmethod
     def _normalizar(fila: Optional[dict]) -> Optional[dict]:
@@ -197,8 +179,6 @@ class ServicioProcesadores(ServicioBD):
     @staticmethod
     def _validar(ruta: str, operacion: str, modo: str,
                  procesador_id: Optional[str], esquema) -> None:
-        # La ruta debe existir y estar activa en el catálogo (CRUD /api/v1/rutas/):
-        # el CRUD de procesadores es la unión ruta <-> procesador.
         registradas = rutas.claves_activas()
         if ruta not in registradas:
             raise ValueError(
@@ -230,15 +210,13 @@ class ServicioProcesadores(ServicioBD):
         if umbral is not None and not (0.0 <= float(umbral) <= 1.0):
             raise ValueError("El umbral de confianza debe estar entre 0 y 1 (ej. 0.85).")
 
-    # --- Inicialización ---
-
     def inicializar(self) -> None:
-        """Crea la tabla (idempotente) y la siembra si está vacía."""
+        """Crea la tabla (idempotente) y la siembra si está vacía. Tolera la
+        carrera entre workers al arrancar (captura UniqueViolation) y migra
+        borrando la fila 'parse' obsoleta de la ruta validar-identidad."""
         try:
             with self._conectar() as con:
                 with con.cursor() as cur:
-                    # Migración (idempotente): validar-identidad ya no usa OCR; su
-                    # fila 'parse' sembrada en versiones anteriores se retira.
                     cur.execute(
                         "DELETE FROM procesadores WHERE ruta = 'validar-identidad' AND operacion = 'parse'"
                     )
@@ -251,10 +229,7 @@ class ServicioProcesadores(ServicioBD):
                              for (ru, op, cl, mo, pid, ver, esq, umb) in SEMILLA],
                         )
         except pg_errors.UniqueViolation:
-            # Carrera entre workers al arrancar: otro proceso sembró primero.
             pass
-
-    # --- CRUD ---
 
     def listar(self, solo_activos: bool = False) -> list:
         sql = f"SELECT {_COLUMNAS} FROM procesadores"
@@ -361,8 +336,6 @@ class ServicioProcesadores(ServicioBD):
                 cur.execute("DELETE FROM procesadores WHERE id = %s", (id_proc,))
                 return cur.rowcount > 0
 
-    # --- Resolutores: traducen la fila activa al fragmento de body de Extend ---
-
     def _obtener_activa(self, ruta: str, operacion: str, clase: str) -> Optional[dict]:
         """Fila activa para (ruta, operacion, clase), o None si no hay ninguna."""
         with self._conectar() as con:
@@ -447,8 +420,6 @@ class ServicioProcesadores(ServicioBD):
         if fila and isinstance(fila.get("esquema"), dict):
             target = fila["esquema"].get("target") or target
         return {"config": {"target": target}}
-
-    # --- Sincronización con Extend Studio ---
 
     async def listar_de_extend(self, tipo: str) -> list:
         """
@@ -542,5 +513,4 @@ class ServicioProcesadores(ServicioBD):
         return resultado
 
 
-# Instancia única del servicio.
 procesadores = ServicioProcesadores()

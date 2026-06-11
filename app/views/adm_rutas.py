@@ -25,16 +25,12 @@ api = APIRouter()
 paginas = APIRouter()
 
 
-# --- Página ---
-
 @paginas.get("/admin/rutas", include_in_schema=False)
 def pagina(request: Request):
     return plantillas.TemplateResponse(
         request, "rutas/index.html", {"pagina": "rutas"}
     )
 
-
-# --- API (scope admin) ---
 
 @api.get("/rutas/", response_model=List[RutaRespuesta], tags=["Rutas (admin)"])
 def listar_rutas(solo_activos: bool = False, _admin: dict = Depends(requiere_admin)):
@@ -56,7 +52,6 @@ def crear_ruta(datos: RutaCrear, _admin: dict = Depends(requiere_admin)):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except pg_errors.UniqueViolation:
-        # La clave es UNIQUE: 409 (conflicto), no 500.
         raise HTTPException(
             status_code=409,
             detail=f"Ya existe una ruta con la clave '{rutas.normalizar_clave(datos.clave)}'.",
@@ -79,7 +74,6 @@ def eliminar_ruta(clave: str, _admin: dict = Depends(requiere_admin)):
     clave_norm = rutas.normalizar_clave(clave)
     if rutas.obtener(clave_norm) is None:
         raise HTTPException(status_code=404, detail=f"No existe una ruta con la clave '{clave}'.")
-    # Integridad de la unión: una ruta con procesadores asociados no se borra.
     asociados = [p for p in procesadores.listar() if p["ruta"] == clave_norm]
     if asociados:
         raise HTTPException(

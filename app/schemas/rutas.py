@@ -4,23 +4,22 @@ from pydantic import BaseModel, Field
 
 
 class RutaCrear(BaseModel):
-    # Identificador lógico que referencian los procesadores ('clasificar', ...).
+    """Datos de entrada para crear una ruta lógica que referencian los procesadores."""
     clave: str = Field(..., min_length=1, max_length=50)
-    # El endpoint real del servicio ('/api/v1/clasificar/', ...). Informativo.
     url: str = Field(..., min_length=1, max_length=200)
     descripcion: str = ""
     activo: bool = True
 
 
 class RutaActualizar(BaseModel):
-    # Todos opcionales: solo se actualizan los campos enviados. La clave es
-    # inmutable (es lo que referencian las filas de procesadores).
+    """Actualización parcial de una ruta; la clave es inmutable."""
     url: Optional[str] = Field(None, min_length=1, max_length=200)
     descripcion: Optional[str] = None
     activo: Optional[bool] = None
 
 
 class RutaRespuesta(BaseModel):
+    """Metadatos de una ruta lógica."""
     id: int
     clave: str
     url: str

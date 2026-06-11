@@ -33,8 +33,6 @@ def verificar_api_key(
 
     registro = consumidores.verificar(x_api_key)
     if registro is None:
-        # Mismo mensaje para clave inexistente, mal formada o revocada: no se
-        # le da pistas a un atacante sobre por qué falló.
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="API key inválida o revocada.",

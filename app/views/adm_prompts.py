@@ -21,8 +21,6 @@ from app.services.prompts import prompts
 api = APIRouter()
 
 
-# --- API (scope admin) ---
-
 @api.get("/prompts/", response_model=List[PromptRespuesta], tags=["Prompts (admin)"])
 def listar_prompts(solo_activos: bool = False, _admin: dict = Depends(requiere_admin)):
     return prompts.listar(solo_activos=solo_activos)
@@ -43,7 +41,6 @@ def crear_prompt(datos: PromptCrear, _admin: dict = Depends(requiere_admin)):
     try:
         return prompts.crear(datos.clave, datos.tipo, datos.descripcion, datos.activo)
     except pg_errors.UniqueViolation:
-        # La clave es UNIQUE: 409 (conflicto), no 500.
         raise HTTPException(
             status_code=409,
             detail=f"Ya existe un prompt con la clave '{prompts.normalizar_clave(datos.clave)}'.",

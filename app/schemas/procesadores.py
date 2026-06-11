@@ -4,31 +4,20 @@ from pydantic import BaseModel, Field
 
 
 class ProcesadorCrear(BaseModel):
-    # Ruta de la API que usa esta fila ('clasificar'|'validar-identidad'|'ocr').
+    """Datos de entrada para crear una fila de procesador que configura una ruta/operación de Extend."""
     ruta: str = Field(..., description="'clasificar' | 'validar-identidad' | 'ocr'")
-    # Operación de Extend que configura esta fila.
     operacion: str = Field(..., description="'clasificar' | 'extraer' | 'parse'")
-    # Clase de documento ('CEDULA', 'PASAPORTE', ...) para los esquemas de
-    # extracción; vacío cuando la operación no usa clase (clasificar / parse).
     clase: str = Field("", max_length=50)
-    # 'id' = procesador publicado en Extend; 'inline' = config en esta fila / BD.
     modo: str = Field(..., description="'id' | 'inline'")
-    # Id del procesador publicado (cl_.../ex_...), obligatorio si modo='id'.
     procesador_id: Optional[str] = Field(None, max_length=200)
-    # Versión del procesador publicado a fijar (modo='id'); vacío = última publicada.
     version: Optional[str] = Field(None, max_length=50)
-    # JSON Schema de extracción (modo='inline' en 'extraer') u opciones del parse.
     esquema: Optional[dict] = None
-    # Umbral de confianza 0..1 (solo 'clasificar'): mínimo para dar por válida
-    # una clasificación. Si se omite, se usa el valor por defecto (0.85).
     umbral: Optional[float] = Field(None, ge=0, le=1)
     activo: bool = True
 
 
 class ProcesadorActualizar(BaseModel):
-    # Todos opcionales: solo se actualizan los campos enviados. `procesador_id`,
-    # `esquema` y `umbral` admiten null explícito (se distingue con
-    # model_fields_set en la API).
+    """Actualización parcial de un procesador; procesador_id, esquema y umbral admiten null explícito."""
     ruta: Optional[str] = None
     operacion: Optional[str] = None
     clase: Optional[str] = Field(None, max_length=50)
@@ -41,6 +30,7 @@ class ProcesadorActualizar(BaseModel):
 
 
 class ProcesadorRespuesta(BaseModel):
+    """Metadatos de un procesador configurado."""
     id: int
     ruta: str
     operacion: str
@@ -55,9 +45,8 @@ class ProcesadorRespuesta(BaseModel):
     actualizado_en: str
 
 
-# --- Sincronización con Extend Studio (GET /processors) ---
-
 class VersionExtend(BaseModel):
+    """Una versión publicada de un procesador en Extend Studio."""
     id: Optional[str] = None
     version: Optional[str] = None
 

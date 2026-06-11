@@ -32,8 +32,6 @@ api = APIRouter()
 paginas = APIRouter()
 
 
-# --- Página ---
-
 @paginas.get("/admin/procesadores", include_in_schema=False)
 def pagina(request: Request):
     return plantillas.TemplateResponse(
@@ -41,20 +39,20 @@ def pagina(request: Request):
     )
 
 
-# --- API (scope admin) ---
-
 @api.get("/procesadores/", response_model=List[ProcesadorRespuesta], tags=["Procesadores (admin)"])
 def listar_procesadores(solo_activos: bool = False, _admin: dict = Depends(requiere_admin)):
     return procesadores.listar(solo_activos=solo_activos)
 
 
-# Debe declararse ANTES de "/procesadores/{id_proc}" para que 'extend' no se
-# interprete como un id.
 @api.get("/procesadores/extend", response_model=List[ProcesadorExtend], tags=["Procesadores (admin)"])
 async def procesadores_de_extend(tipo: str, _admin: dict = Depends(requiere_admin)):
     """
     Lista los procesadores publicados en Extend Studio (GET /processors) para
     elegirlos en /admin. `tipo` = 'clasificar' o 'extraer'.
+
+    CRÍTICO: este endpoint está declarado a propósito ANTES de la ruta
+    "/procesadores/{id_proc}" para que 'extend' no se interprete como un id; si
+    se reordena, se rompe el ruteo.
     """
     try:
         return await procesadores.listar_de_extend(tipo)
@@ -125,7 +123,6 @@ def crear_procesador(datos: ProcesadorCrear, _admin: dict = Depends(requiere_adm
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except pg_errors.UniqueViolation:
-        # (ruta, operacion, clase) es UNIQUE: 409 (conflicto), no 500.
         raise HTTPException(
             status_code=409,
             detail=(f"Ya existe un procesador para la ruta "
@@ -137,8 +134,12 @@ def crear_procesador(datos: ProcesadorCrear, _admin: dict = Depends(requiere_adm
 
 @api.put("/procesadores/{id_proc}", response_model=ProcesadorRespuesta, tags=["Procesadores (admin)"])
 def actualizar_procesador(id_proc: int, datos: ProcesadorActualizar, _admin: dict = Depends(requiere_admin)):
-    # procesador_id, version, esquema y umbral admiten null explícito: se
-    # distingue "no enviado" de "enviado como null" con model_fields_set.
+    """
+    Actualiza un procesador.
+
+    procesador_id, version, esquema y umbral admiten null explícito, por eso se
+    distingue "no enviado" de "enviado como null" con model_fields_set.
+    """
     enviados = datos.model_fields_set
     try:
         p = procesadores.actualizar(

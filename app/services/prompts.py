@@ -21,7 +21,6 @@ from psycopg2.extras import RealDictCursor
 
 from app.core.db import ServicioBD
 
-# Clasificaciones con las que se siembra la tabla la primera vez.
 SEMILLA = [
     ("cedula", "CEDULA",
      "Cédula de identidad ecuatoriana: documento de identificación personal "
@@ -76,7 +75,8 @@ class ServicioPrompts(ServicioBD):
         return "other" if tipo.lower() == "other" else tipo.upper()
 
     def inicializar(self) -> None:
-        """Crea la tabla (idempotente) y la siembra si está vacía."""
+        """Crea la tabla (idempotente) y la siembra si está vacía. Tolera la
+        carrera entre workers al arrancar."""
         try:
             with self._conectar() as con:
                 with con.cursor() as cur:
@@ -87,7 +87,6 @@ class ServicioPrompts(ServicioBD):
                             SEMILLA,
                         )
         except pg_errors.UniqueViolation:
-            # Carrera entre workers al arrancar: otro proceso sembró primero.
             pass
 
     def listar(self, solo_activos: bool = False) -> list:
@@ -158,5 +157,4 @@ class ServicioPrompts(ServicioBD):
                 return cur.rowcount > 0
 
 
-# Instancia única del servicio.
 prompts = ServicioPrompts()

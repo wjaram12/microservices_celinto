@@ -18,13 +18,8 @@ from psycopg2.extras import RealDictCursor
 
 from app.core.db import ServicioBD
 
-# Prefijo identificable para reconocer una clave del servicio de un vistazo
-# (útil en logs de los consumidores y para detectar fugas con escáneres).
-PREFIJO_LLAVE = "wsk_"  # whistle service key
+PREFIJO_LLAVE = "wsk_"
 
-# Scopes (permisos) que puede tener una clave:
-#   - consumo: clasificar y hacer OCR (lo que usan los sistemas consumidores).
-#   - admin:   además, gestionar prompts, procesadores y API keys.
 SCOPES_VALIDOS = {"consumo", "admin"}
 
 
@@ -81,7 +76,6 @@ class APIConsumidores(ServicioBD):
                 f"{', '.join(sorted(SCOPES_VALIDOS))}."
             )
 
-        # token_urlsafe(32) -> ~256 bits de entropía: imposible de adivinar.
         llave = PREFIJO_LLAVE + secrets.token_urlsafe(32)
         with self._conectar() as con:
             with con.cursor(cursor_factory=RealDictCursor) as cur:
@@ -93,7 +87,7 @@ class APIConsumidores(ServicioBD):
                 fila = cur.fetchone()
 
         registro = self._normalizar_fila(fila)
-        registro["llave"] = llave  # solo en este retorno; nunca se vuelve a tener
+        registro["llave"] = llave
         return registro
 
     def listar(self) -> list:
@@ -193,7 +187,6 @@ class APIConsumidores(ServicioBD):
                 fila = cur.fetchone()
                 if fila is None or not fila["activo"]:
                     return None
-                # Registrar el último uso para auditoría.
                 cur.execute(
                     "UPDATE api_keys SET ultimo_uso = now() WHERE id = %s",
                     (fila["id"],),
@@ -205,5 +198,4 @@ class APIConsumidores(ServicioBD):
                 }
 
 
-# Instancia única del servicio (estado: solo la bandera de tabla asegurada).
 consumidores = APIConsumidores()

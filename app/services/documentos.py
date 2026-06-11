@@ -20,31 +20,22 @@ from app.services.extend import extend
 from app.services.procesadores import OTRO_POR_DEFECTO, procesadores
 from app.services.prompts import prompts
 
-# --- Constantes ---
-LONGITUD_CEDULA = 10                    # la cédula ecuatoriana tiene 10 dígitos
+LONGITUD_CEDULA = 10
 CLASE_CEDULA = "CEDULA"
 CLASE_PASAPORTE = "PASAPORTE"
 TIPOS_IDENTIDAD = {CLASE_CEDULA, CLASE_PASAPORTE}
 FORMATOS_ACEPTADOS = {"application/pdf", "image/jpeg", "image/png"}
-MAX_BYTES = 10 * 1024 * 1024            # 10 MB
+MAX_BYTES = 10 * 1024 * 1024
 PATRON_CEDULA = re.compile(r"\b\d{10}\b")
 
-# Nombre lógico de cada ruta de la API, para resolver sus procesadores en la
-# tabla `procesadores` (cada ruta puede usar procesadores distintos).
 RUTA_CLASIFICAR = "clasificar"
 RUTA_VALIDAR = "validar-identidad"
 RUTA_OCR = "ocr"
 
-# Clases que NUNCA cuentan como documento válido, aunque la confianza sea alta.
-# Extend usa "other" como clase de descarte; se acepta también "OTROS".
 CLASES_RECHAZADAS = {"OTROS", "OTHER", "DESCONOCIDO", "DOCUMENTO_DESCONOCIDO"}
 
-# Tipos que se consideran clase de descarte (se envían a Extend como "other").
-# La clase de descarte por defecto (OTRO_POR_DEFECTO) vive en services/procesadores.
 TIPOS_DESCARTE = {"other", "otros"}
 
-
-# --- Preprocesamiento ---
 
 def validar_formato(contenido: bytes, mime_type: str) -> None:
     if mime_type not in FORMATOS_ACEPTADOS:
@@ -71,8 +62,6 @@ def preprocesar(contenido: bytes, mime_type: str) -> None:
     for paso in PREPROCESADORES:
         paso(contenido, mime_type)
 
-
-# --- Búsqueda de texto en el OCR (genérica) ---
 
 def _normalizar_busqueda(texto: str) -> str:
     """Minúsculas y sin tildes, 1 carácter de salida por carácter de entrada
@@ -116,8 +105,6 @@ def buscar_en_texto(texto: str, termino: str, margen: int = 40) -> dict:
     }
 
 
-# --- Helpers de cédula ---
-
 def normalizar_cedula(valor) -> str:
     """
     Normaliza un número de identificación a solo dígitos: quita espacios,
@@ -127,7 +114,7 @@ def normalizar_cedula(valor) -> str:
     if valor is None:
         return ""
     if isinstance(valor, float) and valor.is_integer():
-        valor = int(valor)  # 1710034065.0 -> 1710034065 (sin el ".0")
+        valor = int(valor)
     return re.sub(r"\D", "", str(valor))
 
 
@@ -143,9 +130,6 @@ def normalizar_identificacion(valor) -> str:
     return re.sub(r"[^A-Z0-9]", "", str(valor).upper())
 
 
-# Claves bajo las que puede venir el número de identificación en los campos
-# extraídos, según la clase del documento y cómo se haya nombrado en el esquema
-# del extractor (el del builder, uno importado o un procesador publicado).
 _CLAVES_NUMERO = (
     "numero_cedula", "numero_identificacion", "numero_documento",
     "cedula", "identificacion", "numero",
@@ -190,8 +174,6 @@ def cedula_es_valida(numero: str) -> bool:
     return int(numero[9]) == verificador_esperado
 
 
-# --- Servicio: operaciones de alto nivel (lo que llaman las views) ---
-
 class ServicioDocumentos:
     """Flujos completos de clasificación, OCR y validación de identidad."""
 
@@ -216,7 +198,6 @@ class ServicioDocumentos:
             {"id": p["clave"], "type": p["tipo"], "description": p["descripcion"]}
             for p in positivas
         ]
-        # Las filas de descarte se mandan SIEMPRE con type "other".
         clasificaciones.extend(
             {"id": p["clave"], "type": "other", "description": p["descripcion"]}
             for p in descarte
@@ -295,15 +276,10 @@ class ServicioDocumentos:
         estructurada, no del texto. (El campo `ocr` de la respuesta quedó
         deprecado y siempre es null.)
         """
-        # Validación local del dato del sistema (gratis e instantánea) antes de
-        # gastar llamadas a Extend. El número puede ser de cédula (solo dígitos)
-        # o de pasaporte (alfanumérico); la comparación depende de la clase que
-        # detecte el clasificador.
         id_sistema = None
         if cedula_sistema and cedula_sistema.strip():
             id_sistema = normalizar_identificacion(cedula_sistema)
             if id_sistema.isdigit():
-                # Solo dígitos => se espera una cédula ecuatoriana: fail-fast.
                 if len(id_sistema) != LONGITUD_CEDULA:
                     raise ErrorDeValidacion(
                         f"La cédula del sistema debe tener {LONGITUD_CEDULA} dígitos; "
@@ -329,7 +305,6 @@ class ServicioDocumentos:
         es_cedula = clase == CLASE_CEDULA and confianza >= umbral
         es_identidad = clase in TIPOS_IDENTIDAD and confianza >= umbral
 
-        # Extracción estructurada según el tipo.
         datos = {}
         if es_identidad:
             datos = await self._extraer_datos(RUTA_VALIDAR, clase, file_id)
@@ -350,14 +325,10 @@ class ServicioDocumentos:
             resultado["identificacion_sistema"] = cedula_sistema
 
             if es_identidad:
-                # El número leído sale de la extracción estructurada (/extract) y
-                # se compara NORMALIZADO en ambos lados, según la clase detectada.
                 if clase == CLASE_CEDULA:
-                    # Cédula: solo dígitos + dígito verificador.
                     id_documento = numero_en_datos(datos)
                     id_documento = id_documento if cedula_es_valida(id_documento) else None
                 else:
-                    # Pasaporte: alfanumérico en MAYÚSCULAS (sin guiones/espacios).
                     id_documento = normalizar_identificacion(
                         valor_en_datos(datos, _CLAVES_PASAPORTE)
                     ) or None
@@ -369,5 +340,4 @@ class ServicioDocumentos:
         return resultado
 
 
-# Instancia única del servicio.
 documentos = ServicioDocumentos()

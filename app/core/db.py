@@ -14,14 +14,10 @@ from app.core.config import settings
 
 
 class ServicioBD:
-    # DDL de la tabla del servicio (CREATE TABLE IF NOT EXISTS ...).
     DDL: str = ""
-    # ALTERs idempotentes para columnas añadidas con el tiempo
-    # (ALTER TABLE ... ADD COLUMN IF NOT EXISTS ...).
     ALTERS: tuple = ()
 
     def __init__(self):
-        # Bandera para asegurar la tabla una sola vez por proceso.
         self._tabla_lista = False
 
     def _asegurar_tabla(self, con) -> None:
