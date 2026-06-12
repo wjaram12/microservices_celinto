@@ -177,21 +177,6 @@ def anteponer_prefijo_pasaporte(datos: dict) -> dict:
     return datos
 
 
-# Claves bajo las que puede venir el número de registro de un título SENESCYT.
-# Es el dato que DEFINE a un registro; sin él, no se da por válido.
-_CLAVES_REGISTRO = (
-    "numero_registro", "num_registro", "registro",
-    "numero_registro_senescyt", "numero_acta",
-)
-
-
-def registro_senescyt_en_datos(datos: dict) -> str:
-    """Número de registro SENESCYT entre los campos extraídos ('' si no aparece
-    bajo ninguna clave conocida)."""
-    valor = valor_en_datos(datos, _CLAVES_REGISTRO)
-    return str(valor or "").strip()
-
-
 def cedula_es_valida(numero: str) -> bool:
     """Verifica una cédula ecuatoriana con el dígito verificador (módulo 10)."""
     if len(numero) != LONGITUD_CEDULA or not numero.isdigit():
@@ -394,33 +379,32 @@ class ServicioDocumentos:
         nombre: str = "",
     ) -> dict:
         """
-        Valida que el documento sea un registro de título de la SENESCYT en DOS
-        pasos: (1) el clasificador lo reconoce como REGISTRO_SENESCYT con
-        confianza suficiente, y (2) la extracción trae el número de registro (el
-        dato que define a un registro). Solo si ambos se cumplen es válido. Usa
-        clasificador + extractor (sin OCR); el extractor se configura por ruta en
-        la tabla `procesadores`.
+        Valida que el documento sea un registro de título de la SENESCYT: el
+        clasificador lo reconoce como REGISTRO_SENESCYT con confianza suficiente
+        y el extractor logra leer información. Es válido solo si se cumplen ambas;
+        un SENESCYT sin datos indica fallo del extractor o documento ilegible.
+        Usa clasificador + extractor (sin OCR); el extractor se configura por ruta
+        en la tabla `procesadores`.
         """
         preprocesar(contenido, mime_type)
         file_id = await extend.subir_archivo(contenido, mime_type, nombre)
         clase, confianza = await self._clasificar_archivo(file_id, RUTA_SENESCYT)
         umbral = procesadores.umbral_clasificacion(RUTA_SENESCYT)
 
-        # Paso 1: el clasificador lo reconoce como registro SENESCYT.
+        # El clasificador lo reconoce como registro SENESCYT.
         es_senescyt = clase == CLASE_SENESCYT and confianza >= umbral
 
         datos = {}
         if es_senescyt:
             datos = await self._extraer_datos(RUTA_SENESCYT, clase, file_id)
 
-        # Paso 2: la extracción confirma el número de registro.
-        tiene_registro = bool(registro_senescyt_en_datos(datos))
-        es_valido = es_senescyt and tiene_registro
+        # Es válido solo si además el extractor pudo leer información: un SENESCYT
+        # sin datos significa que el extractor falló o el documento no es legible.
+        es_valido = es_senescyt and bool(datos)
 
         return {
             "clase_detectada": clase,
             "confianza": confianza,
-            "es_senescyt": es_senescyt,
             "es_valido": es_valido,
             "datos": datos,
         }

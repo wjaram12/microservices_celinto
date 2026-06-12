@@ -61,7 +61,7 @@
   }
   .nav-item:hover { background: var(--md-surface-container-high); }
   .nav-item.activa { background: var(--md-secondary-container); color: var(--md-on-secondary-container); }
-  .aside-pie { padding: 8px 4px 0; }
+  .aside-pie { padding: 8px 4px 0; display: flex; flex-direction: column; gap: 8px; }
   .aside-pie button { width: 100%; }
 
   .contenido { flex: 1; min-width: 0; display: flex; flex-direction: column; }
@@ -266,6 +266,7 @@
         <a class="nav-item {{ 'activa' if pagina == 'consumidores' else '' }}" href="/admin/consumidores">🔑 <span>Consumidores</span></a>
       </nav>
       <div class="aside-pie">
+        <button class="btn-suave" onclick="reiniciarCache()">♻️ Reiniciar caché</button>
         <button class="btn-suave" onclick="salir()">🚪 Salir</button>
       </div>
     </aside>
@@ -311,6 +312,19 @@ function salir() {
   clave = "";
   $("#clave-input").val("");
   mostrarPanel(false);
+}
+
+// Vacía la caché centralizada (Redis): todos los workers releen la config de la
+// base en la siguiente petición. No reinicia procesos.
+async function reiniciarCache() {
+  const r = await llamar("/api/v1/cache/reiniciar", { method: "POST" });
+  if (sesionInvalida(r.status)) return;
+  if (r.ok) {
+    const n = (r.cuerpo && r.cuerpo.claves_borradas) || 0;
+    avisar("Caché reiniciada (" + n + " clave" + (n === 1 ? "" : "s") + " borrada" + (n === 1 ? "" : "s") + ").");
+  } else {
+    avisar("No se pudo reiniciar la caché.", true);
+  }
 }
 
 // --- Loader global ---

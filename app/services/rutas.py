@@ -80,18 +80,6 @@ class ServicioRutas(ServicioBD):
                         )
         except pg_errors.UniqueViolation:
             pass
-        self._asegurar_rutas_nuevas()
-
-    def _asegurar_rutas_nuevas(self) -> None:
-        """Da de alta (idempotente) las rutas de la semilla que falten en bases ya
-        existentes (p.ej. validar-registro-senescyt)."""
-        try:
-            existentes = {r["clave"] for r in self.listar()}
-            for clave, url, desc in SEMILLA:
-                if clave not in existentes:
-                    self.crear(clave, url, desc)
-        except pg_errors.UniqueViolation:
-            pass
 
     def listar(self, solo_activos: bool = False) -> list:
         sql = "SELECT id, clave, url, descripcion, activo, creado_en, actualizado_en FROM rutas"

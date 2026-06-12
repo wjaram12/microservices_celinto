@@ -33,7 +33,7 @@ from typing import Callable, Optional
 from psycopg2 import errors as pg_errors
 from psycopg2.extras import Json, RealDictCursor
 
-from app.core.cache import CacheTTL
+from app.core.cache import cache
 from app.core.db import ServicioBD
 from app.services.errores import ErrorDeValidacion
 from app.services.extend import extend
@@ -46,10 +46,10 @@ UMBRAL_DEFECTO = 0.85
 
 _TIPO_EXTEND = {"clasificar": "CLASSIFY", "extraer": "EXTRACT"}
 
-# Cache de las filas activas (la config que leen los resolutores en cada
-# petición). Se invalida en cada escritura y caduca a los TTL_CONFIG segundos.
-TTL_CONFIG = 30.0
-_cache_filas = CacheTTL(TTL_CONFIG)
+# Clave de la caché centralizada para las filas activas (la config que leen los
+# resolutores en cada petición). Se invalida en cada escritura; al ser Redis
+# compartido, los demás workers lo ven al instante.
+CLAVE_CACHE = "procesadores:activas"
 
 OTRO_POR_DEFECTO = {
     "id": "otros_descarte",
@@ -146,11 +146,7 @@ SEMILLA = [
     ("ocr", "parse", "", "inline", None, None, {"target": "markdown"}, None),
 ]
 
-# Filas de la semilla que pertenecen a la ruta validar-registro-senescyt. Se
-# usan para darla de alta de forma idempotente en bases ya existentes.
-_SEMILLA_SENESCYT = [s for s in SEMILLA if s[0] == "validar-registro-senescyt"]
-
-_COLUMNAS = ("id, ruta, operacion, clase, modo, procesador_id, version, esquema, "
+_COLUMNAS =("id, ruta, operacion, clase, modo, procesador_id, version, esquema, "
              "umbral, activo, creado_en, actualizado_en")
 
 
@@ -174,12 +170,6 @@ class ServicioProcesadores(ServicioBD):
             UNIQUE (ruta, operacion, clase)
         )
     """
-    ALTERS = (
-        "ALTER TABLE procesadores ADD COLUMN IF NOT EXISTS umbral REAL",
-        "ALTER TABLE procesadores ADD COLUMN IF NOT EXISTS version TEXT",
-        "ALTER TABLE procesadores ADD COLUMN IF NOT EXISTS ruta TEXT NOT NULL DEFAULT ''",
-    )
-
     @staticmethod
     def _normalizar(fila: Optional[dict]) -> Optional[dict]:
         if fila is None:
@@ -247,14 +237,10 @@ class ServicioProcesadores(ServicioBD):
 
     def inicializar(self) -> None:
         """Crea la tabla (idempotente) y la siembra si está vacía. Tolera la
-        carrera entre workers al arrancar (captura UniqueViolation) y migra
-        borrando la fila 'parse' obsoleta de la ruta validar-identidad."""
+        carrera entre workers al arrancar (captura UniqueViolation)."""
         try:
             with self._conectar() as con:
                 with con.cursor() as cur:
-                    cur.execute(
-                        "DELETE FROM procesadores WHERE ruta = 'validar-identidad' AND operacion = 'parse'"
-                    )
                     cur.execute("SELECT COUNT(*) FROM procesadores")
                     if cur.fetchone()[0] == 0:
                         cur.executemany(
@@ -265,20 +251,7 @@ class ServicioProcesadores(ServicioBD):
                         )
         except pg_errors.UniqueViolation:
             pass
-        self._asegurar_filas_senescyt()
-        _cache_filas.invalidar()
-
-    def _asegurar_filas_senescyt(self) -> None:
-        """Da de alta (idempotente) las filas de la ruta validar-registro-senescyt
-        en bases que ya existían antes de añadir esa ruta. No las re-crea si ya
-        están; tolera la carrera entre workers."""
-        try:
-            existentes = {(f["ruta"], f["operacion"], f["clase"]) for f in self.listar()}
-            for (ru, op, cl, mo, pid, ver, esq, umb) in _SEMILLA_SENESCYT:
-                if (ru, op, cl) not in existentes:
-                    self.crear(ru, op, cl, mo, pid, ver, esq, umb)
-        except pg_errors.UniqueViolation:
-            pass
+        cache.invalidar(CLAVE_CACHE)
 
     def listar(self, solo_activos: bool = False) -> list:
         sql = f"SELECT {_COLUMNAS} FROM procesadores"
@@ -320,7 +293,7 @@ class ServicioProcesadores(ServicioBD):
                      Json(esquema) if esquema is not None else None, umbral, bool(activo)),
                 )
                 fila = self._normalizar(cur.fetchone())
-        _cache_filas.invalidar()
+        cache.invalidar(CLAVE_CACHE)
         return fila
 
     def actualizar(self, id_proc: int,
@@ -378,7 +351,7 @@ class ServicioProcesadores(ServicioBD):
                     (n_ruta, n_operacion, n_clase, n_modo, n_procesador, n_version,
                      Json(n_esquema) if n_esquema is not None else None, n_umbral, n_activo, id_proc),
                 )
-        _cache_filas.invalidar()
+        cache.invalidar(CLAVE_CACHE)
         return self.obtener_por_id(id_proc)
 
     def eliminar(self, id_proc: int) -> bool:
@@ -387,13 +360,13 @@ class ServicioProcesadores(ServicioBD):
             with con.cursor() as cur:
                 cur.execute("DELETE FROM procesadores WHERE id = %s", (id_proc,))
                 borrada = cur.rowcount > 0
-        _cache_filas.invalidar()
+        cache.invalidar(CLAVE_CACHE)
         return borrada
 
     def _filas_activas(self) -> list:
-        """Todas las filas activas, cacheadas (TTL_CONFIG). Es lo que consultan
-        los resolutores en cada petición; evita golpear la BD cada vez."""
-        return _cache_filas.obtener(lambda: self.listar(solo_activos=True))
+        """Todas las filas activas, cacheadas en Redis (centralizado). Es lo que
+        consultan los resolutores en cada petición; evita golpear la BD cada vez."""
+        return cache.obtener(CLAVE_CACHE, lambda: self.listar(solo_activos=True))
 
     def _obtener_activa(self, ruta: str, operacion: str, clase: str) -> Optional[dict]:
         """Fila activa para (ruta, operacion, clase) desde el cache, o None."""

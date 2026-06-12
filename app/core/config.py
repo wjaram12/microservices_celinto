@@ -19,6 +19,10 @@ class Settings(BaseSettings):
 
     DATABASE_URL: str
 
+    # Caché centralizada compartida por los workers de gunicorn. Tiene un default
+    # local para desarrollo; en producción se apunta al Redis real vía .env.
+    REDIS_URL: str = "redis://localhost:6379/0"
+
     model_config = SettingsConfigDict(
         env_file=os.path.join(Path(__file__).resolve().parent.parent.parent, ".env"),
         env_file_encoding="utf-8",

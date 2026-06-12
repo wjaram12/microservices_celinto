@@ -256,6 +256,45 @@ class FakePool:
 psycopg2.pool.ThreadedConnectionPool = FakePool
 
 
+# ---------- Redis simulado en memoria (caché centralizada) ----------
+# Igual que psycopg2: se inyecta un módulo `redis` falso ANTES de importar la app,
+# para que app.core.cache use un Redis en memoria por proceso, sin servidor real.
+import fnmatch
+import types as _types
+
+_REDIS_STORE = {}
+
+
+class _FakeRedis:
+    @staticmethod
+    def from_url(*a, **k):
+        return _FakeRedis()
+
+    def get(self, k):
+        return _REDIS_STORE.get(k)
+
+    def set(self, k, v):
+        _REDIS_STORE[k] = v
+        return True
+
+    def delete(self, *keys):
+        n = 0
+        for k in keys:
+            if k in _REDIS_STORE:
+                del _REDIS_STORE[k]
+                n += 1
+        return n
+
+    def scan_iter(self, match=None):
+        return [k for k in list(_REDIS_STORE) if match is None or fnmatch.fnmatch(k, match)]
+
+
+_fake_redis = _types.ModuleType("redis")
+_fake_redis.Redis = _FakeRedis
+_fake_redis.RedisError = type("RedisError", (Exception,), {})
+sys.modules["redis"] = _fake_redis
+
+
 # ---------- Extend (httpx) simulado, con captura de bodies ----------
 import httpx
 
@@ -689,22 +728,29 @@ MOCK_EXTRACCION.clear()
 MOCK_EXTRACCION.update({"numero_cedula": " 171-003.4065 ", "apellidos": "PEREZ", "nombres": "JUAN"})
 
 
-# ================== FASE 11: cache de config (TTL + invalidación) ==================
-print("\n=== Fase 11: cache de configuración (pool + TTL) ===")
-from app.core.cache import CacheTTL  # noqa: E402
+# ================== FASE 11: caché centralizada (Redis) + invalidación ==================
+print("\n=== Fase 11: caché centralizada en Redis (sin TTL) ===")
+from app.core.cache import cache  # noqa: E402
 _n = {"v": 0}
 def _cargar():
     _n["v"] += 1
     return _n["v"]
-c = CacheTTL(ttl_segundos=60)
-check("primera lectura carga del origen", c.obtener(_cargar) == 1)
-check("segunda lectura usa el cache (no recarga)", c.obtener(_cargar) == 1 and _n["v"] == 1)
-c.invalidar()
-check("tras invalidar, recarga", c.obtener(_cargar) == 2 and _n["v"] == 2)
+check("primera lectura carga del origen", cache.obtener("prueba", _cargar) == 1)
+check("segunda lectura usa la caché (no recarga)",
+      cache.obtener("prueba", _cargar) == 1 and _n["v"] == 1)
+cache.invalidar("prueba")
+check("tras invalidar, recarga", cache.obtener("prueba", _cargar) == 2 and _n["v"] == 2)
+
+# reiniciar() vacía TODA la caché del servicio (lo que dispara el botón del panel).
+cache.obtener("otra", lambda: [1, 2, 3])
+borradas = cache.reiniciar()
+check("reiniciar vacía la caché (≥1 clave borrada)", borradas >= 1)
+check("tras reiniciar, recarga del origen",
+      cache.obtener("prueba", _cargar) == 3 and _n["v"] == 3)
 
 # Invalidación end-to-end: editar un procesador se refleja en el resolutor.
 procesadores.actualizar(id_de(RC, "clasificar"), umbral=0.5, tocar_umbral=True)
-check("escribir invalida el cache (el resolutor ve el cambio)",
+check("escribir invalida la caché (el resolutor ve el cambio)",
       abs(procesadores.umbral_clasificacion(RC) - 0.5) < 1e-9)
 procesadores.actualizar(id_de(RC, "clasificar"), umbral=0.85, tocar_umbral=True)
 check("el pool reemplaza la conexión-por-operación",
@@ -739,14 +785,20 @@ check("clasifica con las clasificaciones propias de la ruta",
 ext = CAPTURAS["/extract"][-1].get("config", {}).get("schema", {}).get("properties", {})
 check("extrae con el esquema SENESCYT", "numero_registro" in ext)
 
-# Paso 2: reconocido como SENESCYT pero SIN número de registro -> no válido.
+# Reconocido como SENESCYT con datos -> válido, sin importar el número de registro.
 MOCK_EXTRACCION.clear()
 MOCK_EXTRACCION.update({"titulo": "Magíster", "institucion": "UCG"})
 r = cliente.post("/api/v1/validaciones/validar-registro-senescyt/", files=ARCHIVO, headers=H)
-check("reconocido pero sin número de registro -> result False",
+check("reconocido como SENESCYT con datos -> result True",
+      r.status_code == 200 and r.json().get("result") is True, r.text[:200])
+
+# Reconocido como SENESCYT pero SIN datos -> inválido (falló el extractor).
+MOCK_EXTRACCION.clear()
+r = cliente.post("/api/v1/validaciones/validar-registro-senescyt/", files=ARCHIVO, headers=H)
+check("SENESCYT sin datos -> result False",
       r.status_code == 200 and r.json().get("result") is False, r.text[:200])
-check("el mensaje avisa que falta el número de registro",
-      "número de registro" in (r.json().get("message") or ""))
+check("el mensaje avisa que falló el extractor / documento ilegible",
+      "extractor" in (r.json().get("message") or ""))
 MOCK_EXTRACCION.clear()
 MOCK_EXTRACCION.update({"numero_registro": "1234-2026-ABC", "titulo": "Magíster en Educación",
                         "institucion": "Universidad Casa Grande"})

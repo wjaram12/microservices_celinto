@@ -22,7 +22,9 @@ from app.services.consumidores import consumidores
 from app.services.procesadores import procesadores
 from app.services.prompts import prompts
 from app.services.rutas import rutas
-from app.views import adm_consumidores, adm_procesadores, adm_prompts, adm_rutas, documentos
+from app.views import (
+    adm_cache, adm_consumidores, adm_procesadores, adm_prompts, adm_rutas, documentos,
+)
 
 app = FastAPI(
     title="Core de Clasificación - Universidad",
@@ -35,7 +37,7 @@ prompts.inicializar()
 rutas.inicializar()
 procesadores.inicializar()
 
-for view in (documentos, adm_prompts, adm_rutas, adm_procesadores, adm_consumidores):
+for view in (documentos, adm_prompts, adm_rutas, adm_procesadores, adm_consumidores, adm_cache):
     app.include_router(
         view.api,
         prefix="/api/v1",

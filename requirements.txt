@@ -18,5 +18,8 @@ httpx
 # --- Base de datos PostgreSQL (API keys y clasificaciones) ---
 psycopg2-binary
 
+# --- Caché centralizada compartida entre los workers de gunicorn ---
+redis
+
 # --- Cliente HTTP para el script de prueba ---
 requests

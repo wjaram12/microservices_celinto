@@ -188,9 +188,10 @@ async def validar_registro_senescyt(file: UploadFile = File(...)):
 
     if resultado["es_valido"]:
         mensaje = "Registro SENESCYT validado; información extraída."
-    elif resultado["es_senescyt"]:
-        mensaje = ("El documento parece un registro SENESCYT, pero no se pudo leer "
-                   "el número de registro; revisa la calidad del documento.")
+    elif resultado["clase_detectada"] == srv.CLASE_SENESCYT:
+        mensaje = ("El documento parece un registro SENESCYT, pero no se pudo extraer "
+                   "la información; falló el extractor o el documento no tiene "
+                   "suficiente claridad.")
     else:
         mensaje = "El documento no fue reconocido como un registro de título de la SENESCYT."
 
