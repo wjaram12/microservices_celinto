@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 # encaje en "corresponde a {etiqueta}" / "Es {etiqueta}".
 ETIQUETAS_SENESCYT = {
     "REGISTRO_SENESCYT": "un registro de título de la SENESCYT",
-    "CARTA_COMPROMISO_SUBIDA_TITULO": "una carta de compromiso de subida de título",
+    "CARTA_COMPROMISO": "una carta de compromiso de subida de título",
     "APOSTILLA": "una apostilla",
 }
 
