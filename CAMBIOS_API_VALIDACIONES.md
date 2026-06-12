@@ -5,6 +5,7 @@ ucg-on pregrado). Afecta a:
 
 - `POST /api/v1/validaciones/validar-identidad/`
 - `POST /api/v1/validaciones/validar-registro-senescyt/`
+- `POST /api/v1/validaciones/validar-pago/` (**NUEVA**)
 - `POST /api/v1/clasificar/` (**ELIMINADA**)
 
 ## 🗑️ Ruta eliminada: `POST /api/v1/clasificar/`
@@ -17,6 +18,25 @@ clase en `document_class`.
 Operativo (servidor): la fila `clasificar` ya no se siembra en las tablas
 `rutas` y `procesadores`; en una base existente la fila vieja queda huérfana y
 puede borrarse desde `/admin/procesadores` y `/admin/rutas`.
+
+## ✅ Ruta nueva: `POST /api/v1/validaciones/validar-pago/`
+
+Valida un comprobante de pago. Clasifica el documento como **DEPOSITO** o
+**TRANSFERENCIA** (o `other` si no es ninguno) y, según la clase detectada,
+extrae su información con el extractor correspondiente.
+
+- **Entrada:** solo `file` (multipart, obligatorio). **No** recibe parámetros de
+  identidad ni de monto: esta ruta **solo clasifica y extrae, no compara** contra
+  ningún valor del sistema.
+- **No** devuelve `match_document` (no hay contraste).
+- `result == true` significa que es un comprobante de pago reconocido con
+  confianza suficiente; usar `status == "extraido"` para saber si además se
+  extrajo la información.
+- `datos` cambia según la clase. En ambas, `monto` es un objeto
+  `{ "amount": number|null, "iso_4217_currency_code": string|null }` y `fecha`
+  viene normalizada a `YYYY-MM-DD`.
+
+Es una ruta **nueva y aditiva**: no cambia ninguna ruta ni respuesta existente.
 
 ## ⚠️ Acción requerida ANTES de actualizar
 
@@ -129,7 +149,30 @@ Campos de la respuesta 200: `result`, `message`, `status`, `match_document`,
 | 5 | Al menos uno de los enviados coincide (OR) | `true` | `extraido` | `true` | "Registro SENESCYT reconocido; la identidad coincide con la del documento." |
 | 6 | Ninguno de los enviados coincide | `true` | `extraido` | `false` | "Es un registro SENESCYT, pero {el número de identificación / los nombres / ambos} no coincide(n) con los datos proporcionados." |
 
-## Errores (ambas rutas)
+## `POST /api/v1/validaciones/validar-pago/`
+
+Entrada: `file` (multipart, obligatorio). Sin parámetros de identidad.
+
+Campos de la respuesta 200: `result`, `message`, `status`, `document_class`
+(`DEPOSITO` / `TRANSFERENCIA` / `other`), `confidence`, `datos`. **No** trae
+`match_document`.
+
+| # | Caso | `result` | `status` | `message` |
+|---|------|:---:|:---:|---------|
+| 1 | No es depósito ni transferencia (clase ajena o confianza < umbral) | `false` | `no_reconocido` | "El documento no fue reconocido como un comprobante de depósito ni de transferencia." |
+| 2 | Es comprobante, pero la extracción no trajo nada | `true` | `extraccion_fallida` | "El documento es un comprobante de pago, pero no se pudo extraer la información; falló el extractor o el documento no tiene suficiente claridad." |
+| 3 | Es comprobante y se extrajo la información | `true` | `extraido` | "Comprobante reconocido como {CLASE}; información extraída." |
+
+Campos de `datos` por clase (todos pueden venir `null` si el documento no los trae):
+
+- **DEPOSITO:** `banco`, `numero_cuenta`, `nombre_depositante`, `monto`
+  (objeto `{amount, iso_4217_currency_code}`), `fecha` (`YYYY-MM-DD`), `hora`,
+  `numero_referencia`, `agencia`, `tipo_cuenta` (`AHORROS`/`CORRIENTE`).
+- **TRANSFERENCIA:** `banco`, `cuenta_origen`, `cuenta_destino`,
+  `nombre_beneficiario`, `monto` (objeto `{amount, iso_4217_currency_code}`),
+  `fecha` (`YYYY-MM-DD`), `hora`, `codigo_autorizacion`, `estado`, `tipo_cuenta`.
+
+## Errores (todas las rutas)
 
 | HTTP | Causa | Detalle |
 |:---:|------|---------|
@@ -140,8 +183,24 @@ Campos de la respuesta 200: `result`, `message`, `status`, `match_document`,
 | 400 | Identificación no numérica con < 5 caracteres | "…es demasiado corta para ser una cédula o un número de pasaporte." |
 | 401/403 | API key ausente, inválida o sin scope de consumo | — |
 | 422 | Falta el campo `file` | Error de validación de FastAPI |
-| 502 | Error del proveedor (Extend) | Mensaje del proveedor |
+| 502 | Error del proveedor (Extend), **tras agotar reintentos** | Mensaje del proveedor |
 | 500 | Error interno inesperado | "Error interno al procesar el documento." |
+
+> Los tres `400` de identificación (cédula de 10 dígitos / dígito verificador /
+> identificación no numérica < 5) solo aplican a `validar-identidad` y
+> `validar-registro-senescyt`, que reciben datos de identidad. `validar-pago` no
+> recibe esos campos, así que solo puede dar los `400` de formato/tamaño de
+> archivo, `401/403`, `422`, `502` y `500`.
+
+**Sobre el 502 (mejora interna, sin cambio de contrato):** el servidor ahora
+reintenta de forma automática los fallos **transitorios** de Extend (caídas de
+red, HTTP 429 y 5xx) antes de rendirse —hasta 3 intentos con espera creciente,
+respetando `Retry-After`—. Para el consumidor el contrato es el mismo: un 502
+sigue significando "el proveedor no respondió". El efecto práctico es que habrá
+**menos 502 esporádicos** y, a cambio, una petición que sí termina en 502 puede
+tardar unos segundos más (el tiempo de los reintentos). Los fallos definitivos
+(HTTP 4xx del proveedor) y los timeouts de lectura largos **no** se reintentan,
+así que no añaden latencia. No se requiere ninguna acción de los consumidores.
 
 **Regla de oro:** aprobar identidad solo con
 `result == true && status == "extraido" && match_document == true`.

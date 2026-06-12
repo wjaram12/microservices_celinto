@@ -1,5 +1,5 @@
 """
-View de inferencia: OCR y validaciones (identidad y registro SENESCYT).
+View de inferencia: OCR y validaciones (identidad, registro SENESCYT y pagos).
 
 Solo capa HTTP: lee la petición, llama al servicio ServicioDocumentos y traduce
 el resultado (o los errores) a códigos HTTP. Sin lógica de negocio.
@@ -10,6 +10,7 @@ from typing import Optional
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 from app.schemas.ocr import RespuestaOCR
+from app.schemas.pago import RespuestaValidacionPago
 from app.schemas.senescyt import RespuestaRegistroSenescyt
 from app.schemas.validador import RespuestaValidacion
 from app.services import documentos as srv
@@ -212,6 +213,42 @@ async def validar_registro_senescyt(
         message=mensaje,
         status=resultado["status"],
         match_document=resultado["match_document"],
+        document_class=resultado["clase_detectada"],
+        confidence=resultado["confianza"],
+        datos=resultado["datos"],
+    )
+
+
+@api.post("/validaciones/validar-pago/", response_model=RespuestaValidacionPago, tags=["Validadores"])
+async def validar_pago(file: UploadFile = File(...)):
+    """Valida que el documento sea un comprobante de pago, lo clasifica como
+    depósito o transferencia y extrae su información con el extractor de la clase
+    detectada. No contrasta los datos contra ningún valor del sistema."""
+    contenido = await leer_archivo(file)
+
+    try:
+        resultado = await documentos.validar_pago(contenido, file.content_type, file.filename or "")
+    except (ErrorDeArchivo, ErrorDeValidacion) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except ErrorDeProveedor as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    except Exception:
+        logger.exception("Error procesando el documento en /validaciones/validar-pago/")
+        raise HTTPException(status_code=500, detail="Error interno al procesar el documento.")
+
+    clase = resultado["clase_detectada"]
+    if not resultado["es_pago"]:
+        mensaje = "El documento no fue reconocido como un comprobante de depósito ni de transferencia."
+    elif not resultado["datos"]:
+        mensaje = ("El documento es un comprobante de pago, pero no se pudo extraer la "
+                   "información; falló el extractor o el documento no tiene suficiente claridad.")
+    else:
+        mensaje = f"Comprobante reconocido como {clase}; información extraída."
+
+    return RespuestaValidacionPago(
+        result=resultado["es_pago"],
+        message=mensaje,
+        status=resultado["status"],
         document_class=resultado["clase_detectada"],
         confidence=resultado["confianza"],
         datos=resultado["datos"],

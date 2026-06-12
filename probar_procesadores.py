@@ -313,10 +313,11 @@ def reiniciar_capturas():
 
 
 class FakeResp:
-    def __init__(self, data, code=200):
+    def __init__(self, data, code=200, headers=None):
         self._d = data
         self.status_code = code
         self.text = json.dumps(data)
+        self.headers = headers or {}
 
     def json(self):
         return self._d
@@ -935,6 +936,193 @@ check("documento ajeno -> status no_reconocido", r.json().get("status") == "no_r
 MOCK_CLASIFICACION.update({"type": "CEDULA", "confidence": 0.95})
 MOCK_EXTRACCION.clear()
 MOCK_EXTRACCION.update({"numero_cedula": " 171-003.4065 ", "apellidos": "PEREZ", "nombres": "JUAN"})
+
+
+# ================== FASE 12-bis: ruta validar-pago (clasificador + extractor por clase) ==================
+print("\n=== Fase 12-bis: ruta validar-pago (depósito/transferencia) ===")
+rutas_pago = {x["clave"] for x in cliente.get("/api/v1/rutas/", headers=A).json()}
+check("la ruta validar-pago está en el catálogo", "validar-pago" in rutas_pago)
+procs_pago = [p for p in cliente.get("/api/v1/procesadores/", headers=A).json()
+              if p["ruta"] == "validar-pago"]
+check("tiene su clasificador y un extractor por clase",
+      {(p["operacion"], p["clase"]) for p in procs_pago}
+      == {("clasificar", ""), ("extraer", "DEPOSITO"), ("extraer", "TRANSFERENCIA")})
+
+
+def validar_pago():
+    return cliente.post("/api/v1/validaciones/validar-pago/", files=ARCHIVO, headers=H)
+
+
+# Camino DEPOSITO.
+MOCK_CLASIFICACION.update({"type": "DEPOSITO", "confidence": 0.96})
+MOCK_EXTRACCION.clear()
+MOCK_EXTRACCION.update({"banco": "Banco Pichincha", "numero_cuenta": "2100123456",
+                        "nombre_depositante": "MARIA LOPEZ", "numero_referencia": "DEP-001",
+                        "monto": {"amount": 150.00, "iso_4217_currency_code": "USD"},
+                        "fecha": "2025-05-14", "agencia": "Agencia Quito Norte"})
+reiniciar_capturas()
+r = validar_pago()
+check("validar-pago (depósito) -> 200", r.status_code == 200, r.text[:300])
+d = r.json() if r.status_code == 200 else {}
+check("reconoce el comprobante (result True)", d.get("result") is True, r.text[:300])
+check("clase detectada DEPOSITO", d.get("document_class") == "DEPOSITO", r.text[:300])
+check("clase + datos -> status extraido", d.get("status") == "extraido", r.text[:300])
+check("devuelve los datos extraídos", (d.get("datos") or {}).get("numero_referencia") == "DEP-001")
+cls = CAPTURAS["/classify"][-1].get("config", {}).get("classifications", [])
+check("clasifica con las clasificaciones propias de pago (deposito/transferencia/other)",
+      any(c.get("type") == "deposito" for c in cls)
+      and any(c.get("type") == "transferencia" for c in cls)
+      and any(c.get("type") == "other" for c in cls))
+props = CAPTURAS["/extract"][-1].get("config", {}).get("schema", {}).get("properties", {})
+check("extrae con el esquema DEPOSITO (numero_cuenta y agencia, sin cuenta_origen)",
+      "numero_cuenta" in props and "agencia" in props and "cuenta_origen" not in props)
+check("el esquema DEPOSITO trae monto como objeto currency",
+      props.get("monto", {}).get("extend:type") == "currency")
+
+# Camino TRANSFERENCIA: el extractor se elige POR CLASE.
+MOCK_CLASIFICACION.update({"type": "TRANSFERENCIA", "confidence": 0.97})
+MOCK_EXTRACCION.clear()
+MOCK_EXTRACCION.update({"banco": "Banco Guayaquil", "cuenta_origen": "XXXX0011",
+                        "cuenta_destino": "XXXX0022", "nombre_beneficiario": "JUAN PEREZ",
+                        "monto": {"amount": 500.00, "iso_4217_currency_code": "USD"},
+                        "fecha": "2025-05-14", "codigo_autorizacion": "SPI-000123"})
+reiniciar_capturas()
+r = validar_pago()
+d = r.json() if r.status_code == 200 else {}
+check("validar-pago (transferencia) -> result True y clase TRANSFERENCIA",
+      d.get("result") is True and d.get("document_class") == "TRANSFERENCIA", r.text[:300])
+props = CAPTURAS["/extract"][-1].get("config", {}).get("schema", {}).get("properties", {})
+check("extrae con el esquema TRANSFERENCIA (campos reales presentes)",
+      "cuenta_origen" in props and "nombre_beneficiario" in props
+      and "codigo_autorizacion" in props and "tipo_cuenta" in props)
+check("el esquema TRANSFERENCIA trae monto como objeto currency",
+      props.get("monto", {}).get("extend:type") == "currency"
+      and "amount" in (props.get("monto", {}).get("properties") or {}))
+check("transferencia devuelve el monto estructurado en datos",
+      (d.get("datos") or {}).get("monto", {}).get("iso_4217_currency_code") == "USD", r.text[:300])
+
+# Confianza bajo umbral (0.85 por defecto) -> no reconocido, sin extraer.
+MOCK_CLASIFICACION.update({"type": "DEPOSITO", "confidence": 0.50})
+MOCK_EXTRACCION.clear()
+MOCK_EXTRACCION.update({"numero_comprobante": "X"})
+reiniciar_capturas()
+r = validar_pago()
+d = r.json() if r.status_code == 200 else {}
+check("confianza bajo umbral -> result False, no_reconocido, datos vacíos",
+      d.get("result") is False and d.get("status") == "no_reconocido" and d.get("datos") == {}, r.text[:300])
+check("bajo umbral NO llama al extractor", len(CAPTURAS["/extract"]) == 0)
+
+# Documento de otra clase -> no reconocido.
+MOCK_CLASIFICACION.update({"type": "CEDULA", "confidence": 0.99})
+r = validar_pago()
+d = r.json() if r.status_code == 200 else {}
+check("documento ajeno -> result False, no_reconocido, datos vacíos",
+      d.get("result") is False and d.get("status") == "no_reconocido" and d.get("datos") == {}, r.text[:300])
+
+# Reconocido como pago pero el extractor no trae nada.
+MOCK_CLASIFICACION.update({"type": "DEPOSITO", "confidence": 0.96})
+MOCK_EXTRACCION.clear()
+r = validar_pago()
+d = r.json() if r.status_code == 200 else {}
+check("comprobante sin datos -> result True, extraccion_fallida",
+      d.get("result") is True and d.get("status") == "extraccion_fallida", r.text[:300])
+check("el mensaje avisa que falló el extractor", "extractor" in (d.get("message") or ""), r.text[:300])
+
+# Auth: sin API key -> 401/403 (igual que el resto de /api/v1).
+check("validar-pago sin API key -> 401/403",
+      cliente.post("/api/v1/validaciones/validar-pago/", files=ARCHIVO).status_code in (401, 403))
+
+# Restaurar mocks neutros para las fases siguientes.
+MOCK_CLASIFICACION.update({"type": "CEDULA", "confidence": 0.95})
+MOCK_EXTRACCION.clear()
+MOCK_EXTRACCION.update({"numero_cedula": " 171-003.4065 ", "apellidos": "PEREZ", "nombres": "JUAN"})
+
+
+# ================== FASE 13: reintentos ante fallos transitorios de Extend ==================
+print("\n=== Fase 13: reintentos del cliente Extend (red/429/5xx) ===")
+import asyncio  # noqa: E402
+
+from app.services.errores import ErrorDeProveedor  # noqa: E402
+from app.services.extend import ClienteExtend, _leer_retry_after  # noqa: E402
+
+
+class _ClienteReintentos:
+    """Cliente httpx falso guiado por un guion: cada entrada es la acción de una
+    llamada — ("raise", excepcion) o ("resp", status, headers). La última acción
+    se repite si hay más llamadas que entradas (para simular fallos persistentes)."""
+
+    def __init__(self, guion):
+        self.guion = guion
+        self.llamadas = 0
+
+    async def request(self, metodo, ruta, **k):
+        self.llamadas += 1
+        accion = self.guion[min(self.llamadas - 1, len(self.guion) - 1)]
+        if accion[0] == "raise":
+            raise accion[1]
+        _, status, headers = accion
+        return FakeResp({"ok": status < 400}, status, headers)
+
+
+async def _sin_dormir(_segundos):
+    return None
+
+
+def correr_llamada(guion):
+    """Ejecuta ClienteExtend._llamar contra el guion, sin dormir entre reintentos.
+    Devuelve (estado, numero_de_llamadas) con estado 'ok' o 'error' (502)."""
+    c = ClienteExtend()
+    c._cliente = _ClienteReintentos(guion)
+    c._dormir = _sin_dormir
+
+    async def _go():
+        try:
+            await c._llamar("POST", "/x", json={})
+            return "ok"
+        except ErrorDeProveedor:
+            return "error"
+
+    return asyncio.run(_go()), c._cliente.llamadas
+
+
+CE = httpx.ConnectError("conexión rechazada")
+
+estado, n = correr_llamada([("raise", CE), ("raise", CE), ("resp", 200, {})])
+check("red caída 2 veces y luego 200 -> éxito al 3er intento", estado == "ok" and n == 3, f"{estado}/{n}")
+
+estado, n = correr_llamada([("resp", 503, {}), ("resp", 200, {})])
+check("HTTP 503 y luego 200 -> reintenta y tiene éxito", estado == "ok" and n == 2, f"{estado}/{n}")
+
+estado, n = correr_llamada([("resp", 429, {"Retry-After": "0"}), ("resp", 200, {})])
+check("HTTP 429 (Retry-After) -> reintenta y tiene éxito", estado == "ok" and n == 2, f"{estado}/{n}")
+
+estado, n = correr_llamada([("resp", 400, {})])
+check("HTTP 400 -> NO se reintenta (502 inmediato)", estado == "error" and n == 1, f"{estado}/{n}")
+
+estado, n = correr_llamada([("resp", 401, {})])
+check("HTTP 401 -> NO se reintenta", estado == "error" and n == 1, f"{estado}/{n}")
+
+estado, n = correr_llamada([("resp", 503, {})])  # siempre 503
+check("HTTP 503 persistente -> agota MAX_INTENTOS y da 502",
+      estado == "error" and n == ClienteExtend.MAX_INTENTOS, f"{estado}/{n}")
+
+estado, n = correr_llamada([("raise", httpx.ReadTimeout("lento"))])
+check("ReadTimeout -> NO se reintenta (latencia ya consumida)", estado == "error" and n == 1, f"{estado}/{n}")
+
+estado, n = correr_llamada([("raise", httpx.ConnectError("x"))])  # red persistente
+check("red caída persistente -> agota MAX_INTENTOS y da 502",
+      estado == "error" and n == ClienteExtend.MAX_INTENTOS, f"{estado}/{n}")
+
+
+class _Resp:
+    def __init__(self, headers):
+        self.headers = headers
+
+
+check("Retry-After numérico se lee en segundos", _leer_retry_after(_Resp({"Retry-After": "5"})) == 5.0)
+check("Retry-After ausente -> None (usa backoff)", _leer_retry_after(_Resp({})) is None)
+check("Retry-After con fecha HTTP -> None (usa backoff)",
+      _leer_retry_after(_Resp({"Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"})) is None)
 
 
 print("\n" + ("=" * 50))

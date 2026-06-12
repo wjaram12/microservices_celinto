@@ -26,7 +26,10 @@ CLASE_CEDULA = "CEDULA"
 CLASE_PASAPORTE = "PASAPORTE"
 PREFIJO_PASAPORTE = "VS-"
 CLASE_SENESCYT = "REGISTRO_SENESCYT"
+CLASE_DEPOSITO = "DEPOSITO"
+CLASE_TRANSFERENCIA = "TRANSFERENCIA"
 TIPOS_IDENTIDAD = {CLASE_CEDULA, CLASE_PASAPORTE}
+TIPOS_PAGO = {CLASE_DEPOSITO, CLASE_TRANSFERENCIA}
 FORMATOS_ACEPTADOS = {"application/pdf", "image/jpeg", "image/png"}
 MAX_BYTES = 10 * 1024 * 1024
 PATRON_CEDULA = re.compile(r"\b\d{10}\b")
@@ -37,6 +40,7 @@ _PATRON_TOKEN_NOMBRE = re.compile(r"[a-z0-9]+")
 RUTA_VALIDAR = "validar-identidad"
 RUTA_OCR = "ocr"
 RUTA_SENESCYT = "validar-registro-senescyt"
+RUTA_PAGO = "validar-pago"
 
 TIPOS_DESCARTE = {"other", "otros"}
 
@@ -526,6 +530,36 @@ class ServicioDocumentos:
             "match_document": match_document,
             "coincide_identificacion": coincide_identificacion,
             "coincide_nombres": coincide_nombres,
+            "datos": datos,
+        }
+
+    async def validar_pago(self, contenido: bytes, mime_type: str, nombre: str = "") -> dict:
+        """
+        Valida que el documento sea un comprobante de pago y extrae su
+        información. Clasifica entre DEPOSITO y TRANSFERENCIA (vs descarte) y,
+        según la clase detectada, lo procesa con el extractor de esa clase (el
+        extractor se resuelve por (ruta, clase) en la tabla `procesadores`).
+
+        A diferencia de validar-identidad y validar-registro-senescyt, esta ruta
+        NO contrasta la información contra datos del sistema: `es_pago` (el
+        `result`) refleja solo la clasificación y se devuelven los datos
+        extraídos. Usa clasificador + extractor (sin OCR).
+        """
+        preprocesar(contenido, mime_type)
+        file_id = await extend.subir_archivo(contenido, mime_type, nombre)
+        clase, confianza, umbral = await self._clasificar_archivo(file_id, RUTA_PAGO)
+
+        es_pago = clase in TIPOS_PAGO and confianza >= umbral
+
+        datos = {}
+        if es_pago:
+            datos = await self._extraer_datos(RUTA_PAGO, clase, file_id)
+
+        return {
+            "clase_detectada": clase,
+            "confianza": confianza,
+            "es_pago": es_pago,
+            "status": estado_validacion(es_pago, datos),
             "datos": datos,
         }
 

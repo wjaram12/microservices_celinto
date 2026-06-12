@@ -30,6 +30,8 @@ SEMILLA = [
      "Extrae el texto del documento (OCR) con búsqueda opcional de un término."),
     ("validar-registro-senescyt", "/api/v1/validaciones/validar-registro-senescyt/",
      "Valida un registro de título de la SENESCYT: clasifica y extrae su información."),
+    ("validar-pago", "/api/v1/validaciones/validar-pago/",
+     "Valida un comprobante de pago: clasifica (depósito/transferencia) y extrae su información."),
 ]
 
 

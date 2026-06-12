@@ -127,6 +127,319 @@ _ESQUEMA_SENESCYT = {
     },
 }
 
+_ESQUEMA_DEPOSITO = {
+    "type": "object",
+    "properties": {
+        "banco": {
+            "type": ["string", "null"],
+            "description": (
+                "Name of the financial institution that issued the deposit receipt.\n\n"
+                "Extract the full official name exactly as printed in the document \n"
+                "header or stamp.\n\n"
+                "Examples: \"BANCO PICHINCHA\", \"BANCO DEL PACÍFICO\", \"BANCO GUAYAQUIL\",\n"
+                "\"PRODUBANCO\", \"BANCO INTERNACIONAL\", \"COOPERATIVA JEP\", \n"
+                "\"COOPERATIVA 29 DE OCTUBRE\"\n\n"
+                "Return null if not visible or legible."
+            ),
+        },
+        "numero_cuenta": {
+            "type": ["string", "null"],
+            "description": (
+                "Destination bank account number where the deposit was credited.\n"
+                "May appear labeled as \"Cuenta\", \"No. Cuenta\", \"Cuenta Destino\", \n"
+                "or \"Cuenta Beneficiario\".\n\n"
+                "Extract exactly as printed, preserving all digits.\n"
+                "May be partially masked (e.g. XXXX1234) — extract as shown.\n\n"
+                "Return null if not present or not legible."
+            ),
+        },
+        "nombre_depositante": {
+            "type": ["string", "null"],
+            "description": (
+                "Full name of the person or entity that made the deposit.\n"
+                "May appear labeled as \"Depositante\", \"Nombre\", \"Cliente\", \n"
+                "or \"Remitente\".\n\n"
+                "Extract exactly as printed, including all words in the name.\n"
+                "May appear in uppercase or mixed case.\n\n"
+                "Return null if not present or not legible."
+            ),
+        },
+        "monto": {
+            "type": "object",
+            "properties": {
+                "amount": {
+                    "type": ["number", "null"],
+                    "description": "The numeric value of the currency.",
+                },
+                "iso_4217_currency_code": {
+                    "type": ["string", "null"],
+                    "description": "The ISO 4217 currency code (e.g., USD, EUR, GBP).",
+                },
+            },
+            "additionalProperties": False,
+            "required": ["amount", "iso_4217_currency_code"],
+            "extend:type": "currency",
+            "description": (
+                "Total amount deposited, expressed in US dollars (USD).\n"
+                "May appear labeled as \"Valor\", \"Monto\", \"Total\", or \"Importe\".\n\n"
+                "Extract only the numeric value with up to 2 decimal places.\n"
+                "Do not include currency symbols ($ or USD) in the output.\n\n"
+                "Examples: \"150.00\", \"1250.50\", \"75.00\"\n\n"
+                "Return null if not present or not legible."
+            ),
+        },
+        "fecha": {
+            "type": ["string", "null"],
+            "extend:type": "date",
+            "description": (
+                "Date on which the deposit was made.\n"
+                "May appear labeled as \"Fecha\", \"Fecha de Depósito\", or \"Date\".\n\n"
+                "Normalize to ISO format YYYY-MM-DD regardless of how it appears \n"
+                "on the document.\n\n"
+                "Accepted input formats:\n"
+                "- DD/MM/YYYY  → e.g. 14/05/2025\n"
+                "- DD-MM-YYYY  → e.g. 14-05-2025\n"
+                "- DD MMM YYYY → e.g. 14 MAY 2025\n"
+                "- YYYY-MM-DD  → e.g. 2025-05-14\n\n"
+                "Return null if not present or not legible."
+            ),
+        },
+        "hora": {
+            "type": ["string", "null"],
+            "description": (
+                "Time at which the deposit transaction was processed.\n"
+                "May appear labeled as \"Hora\", \"Hora de Transacción\", or \"Time\".\n\n"
+                "Normalize to 24-hour format HH:MM:SS in the output.\n"
+                "If seconds are not shown, default to HH:MM:00.\n\n"
+                "Examples: \"14:32:00\", \"09:05:00\"\n\n"
+                "Return null if not present or not legible."
+            ),
+        },
+        "numero_referencia": {
+            "type": ["string", "null"],
+            "description": (
+                "Unique transaction or reference code assigned by the bank \n"
+                "to identify this deposit operation.\n"
+                "May appear labeled as \"Referencia\", \"No. Transacción\", \n"
+                "\"Código\", \"Secuencial\", or \"Voucher\".\n\n"
+                "Extract exactly as printed, preserving all characters \n"
+                "including leading zeros.\n\n"
+                "Return null if not present or not legible."
+            ),
+        },
+        "agencia": {
+            "type": ["string", "null"],
+            "description": (
+                "Bank branch or agency where the deposit was physically made.\n"
+                "May appear labeled as \"Agencia\", \"Sucursal\", \"Oficina\", or \"Branch\".\n\n"
+                "Extract exactly as printed including city or location if present.\n\n"
+                "Examples: \"Agencia Guayaquil Norte\", \"Sucursal Kennedy\", \n"
+                "\"Oficina Matriz Quito\"\n\n"
+                "Return null if not present or not legible."
+            ),
+        },
+        "tipo_cuenta": {
+            "type": ["string", "null"],
+            "description": (
+                "Type of bank account where the deposit was credited.\n"
+                "May appear labeled as \"Tipo de Cuenta\", \"Tipo Cta\", \n"
+                "\"Cuenta de Ahorros\", \"Cuenta Corriente\", or similar.\n\n"
+                "Expected values:\n"
+                "- \"AHORROS\" — savings account (most common in Ecuador)\n"
+                "- \"CORRIENTE\" — checking account (used by companies/businesses)\n\n"
+                "Normalize to one of these two values regardless of how \n"
+                "it appears on the document.\n\n"
+                "Common variations:\n"
+                "- \"CTA. AHORROS\", \"C/A\", \"AHO\" → return \"AHORROS\"\n"
+                "- \"CTA. CORRIENTE\", \"C/C\", \"CTE\" → return \"CORRIENTE\"\n\n"
+                "If the account type is not explicitly stated but the \n"
+                "account number format suggests it (some banks prefix \n"
+                "account numbers with a digit indicating type), \n"
+                "extract what is visible.\n\n"
+                "Return null if not present or not legible."
+            ),
+        },
+    },
+    "required": [
+        "banco",
+        "numero_cuenta",
+        "nombre_depositante",
+        "monto",
+        "fecha",
+        "hora",
+        "numero_referencia",
+        "agencia",
+        "tipo_cuenta",
+    ],
+    "additionalProperties": False,
+}
+
+_ESQUEMA_TRANSFERENCIA = {
+    "type": "object",
+    "properties": {
+        "banco": {
+            "type": ["string", "null"],
+            "description": (
+                "Name of the financial institution or payment platform that \n"
+                "issued the transfer confirmation.\n\n"
+                "Extract the full official name exactly as printed in the \n"
+                "document header.\n\n"
+                "Examples: \"BANCO PICHINCHA\", \"BANCO CENTRAL DEL ECUADOR\",\n"
+                "\"PRODUBANCO\", \"BANCO GUAYAQUIL\", \"PAYPHONE\", \"COOPERATIVA JEP\"\n\n"
+                "Return null if not visible or legible."
+            ),
+        },
+        "cuenta_origen": {
+            "type": ["string", "null"],
+            "description": (
+                "Bank account number from which the funds were debited.\n"
+                "May appear labeled as \"Cuenta Origen\", \"Cuenta Débito\", \n"
+                "\"Mi Cuenta\", or \"Cuenta Remitente\".\n\n"
+                "Extract exactly as printed, preserving all digits.\n"
+                "May be partially masked (e.g. XXXX5678) — extract as shown.\n\n"
+                "Return null if not present or not legible."
+            ),
+        },
+        "cuenta_destino": {
+            "type": ["string", "null"],
+            "description": (
+                "Bank account number to which the funds were credited.\n"
+                "May appear labeled as \"Cuenta Destino\", \"Cuenta Beneficiario\",\n"
+                "\"Cuenta Crédito\", or \"Cuenta Receptora\".\n\n"
+                "Extract exactly as printed, preserving all digits.\n"
+                "May be partially masked — extract as shown.\n\n"
+                "Return null if not present or not legible."
+            ),
+        },
+        "nombre_beneficiario": {
+            "type": ["string", "null"],
+            "description": (
+                "Full name of the person or entity that received the transfer.\n"
+                "May appear labeled as \"Beneficiario\", \"Nombre Beneficiario\",\n"
+                "\"Destinatario\", or \"Nombre Receptor\".\n\n"
+                "Extract exactly as printed, including all words in the name.\n"
+                "May appear in uppercase or mixed case.\n\n"
+                "Return null if not present or not legible."
+            ),
+        },
+        "monto": {
+            "type": "object",
+            "properties": {
+                "amount": {
+                    "type": ["number", "null"],
+                    "description": "The numeric value of the currency.",
+                },
+                "iso_4217_currency_code": {
+                    "type": ["string", "null"],
+                    "description": "The ISO 4217 currency code (e.g., USD, EUR, GBP).",
+                },
+            },
+            "additionalProperties": False,
+            "required": ["amount", "iso_4217_currency_code"],
+            "extend:type": "currency",
+            "description": (
+                "Total amount transferred, expressed in US dollars (USD).\n"
+                "May appear labeled as \"Valor\", \"Monto\", \"Total\", \n"
+                "\"Importe\", or \"Valor Transferido\".\n\n"
+                "Extract only the numeric value with up to 2 decimal places.\n"
+                "Do not include currency symbols ($ or USD) in the output.\n\n"
+                "Examples: \"500.00\", \"1800.75\", \"250.00\"\n\n"
+                "Return null if not present or not legible."
+            ),
+        },
+        "fecha": {
+            "type": ["string", "null"],
+            "extend:type": "date",
+            "description": (
+                "Date on which the transfer was processed.\n"
+                "May appear labeled as \"Fecha\", \"Fecha de Transferencia\", \n"
+                "\"Fecha de Transacción\", or \"Date\".\n\n"
+                "Normalize to ISO format YYYY-MM-DD regardless of how it \n"
+                "appears on the document.\n\n"
+                "Accepted input formats:\n"
+                "- DD/MM/YYYY  → e.g. 14/05/2025\n"
+                "- DD-MM-YYYY  → e.g. 14-05-2025\n"
+                "- DD MMM YYYY → e.g. 14 MAY 2025\n"
+                "- YYYY-MM-DD  → e.g. 2025-05-14\n\n"
+                "Return null if not present or not legible."
+            ),
+        },
+        "hora": {
+            "type": ["string", "null"],
+            "description": (
+                "Time at which the transfer was processed.\n"
+                "May appear labeled as \"Hora\", \"Hora de Transacción\", or \"Time\".\n\n"
+                "Normalize to 24-hour format HH:MM:SS in the output.\n"
+                "If seconds are not shown, default to HH:MM:00.\n\n"
+                "Examples: \"10:15:00\", \"16:45:00\"\n\n"
+                "Return null if not present or not legible."
+            ),
+        },
+        "codigo_autorizacion": {
+            "type": ["string", "null"],
+            "description": (
+                "Unique authorization or transaction code assigned to this transfer.\n"
+                "May appear labeled as \"Código de Autorización\", \"No. Transacción\",\n"
+                "\"Referencia SPI\", \"Código SPI\", or \"Número de Operación\".\n\n"
+                "For interbank transfers via BCE (Banco Central del Ecuador), \n"
+                "this is the SPI reference code.\n\n"
+                "Extract exactly as printed, preserving all characters \n"
+                "including leading zeros.\n\n"
+                "Return null if not present or not legible."
+            ),
+        },
+        "estado": {
+            "type": ["string", "null"],
+            "description": (
+                "Final status of the transfer transaction as printed on the document.\n"
+                "May appear labeled as \"Estado\", \"Estado de Transacción\", or \"Status\".\n\n"
+                "Expected values:\n"
+                "- Successful: \"EXITOSA\", \"APROBADA\", \"COMPLETADA\", \"PROCESADA\", \"OK\"\n"
+                "- Failed: \"FALLIDA\", \"RECHAZADA\", \"ERROR\", \"PENDIENTE\"\n\n"
+                "Extract exactly as printed. Do not translate or normalize.\n"
+                "If the document only shows a success confirmation without \n"
+                "an explicit status field, return \"EXITOSA\".\n\n"
+                "Return null if not present or not legible."
+            ),
+        },
+        "tipo_cuenta": {
+            "type": ["string", "null"],
+            "description": (
+                "Type of destination bank account that received the transfer.\n"
+                "May appear labeled as \"Tipo Cuenta Destino\", \"Tipo de Cuenta \n"
+                "Beneficiario\", or \"Tipo Cta. Destino\".\n\n"
+                "Expected values:\n"
+                "- \"AHORROS\" — savings account\n"
+                "- \"CORRIENTE\" — checking account\n\n"
+                "Normalize to one of these two values regardless of how \n"
+                "it appears on the document.\n\n"
+                "Common variations:\n"
+                "- \"CTA. AHORROS\", \"C/A\", \"AHO\" → return \"AHORROS\"\n"
+                "- \"CTA. CORRIENTE\", \"C/C\", \"CTE\" → return \"CORRIENTE\"\n\n"
+                "Note: In Ecuador, individual persons typically hold savings \n"
+                "accounts (AHORROS) while legal entities and companies \n"
+                "typically hold checking accounts (CORRIENTE). Use this \n"
+                "as a secondary inference only if the field is not explicitly \n"
+                "printed.\n\n"
+                "Return null if not present or not legible."
+            ),
+        },
+    },
+    "required": [
+        "banco",
+        "cuenta_origen",
+        "cuenta_destino",
+        "nombre_beneficiario",
+        "monto",
+        "fecha",
+        "hora",
+        "codigo_autorizacion",
+        "estado",
+        "tipo_cuenta",
+    ],
+    "additionalProperties": False,
+}
+
 _CLASIF_SENESCYT = {"classifications": [
     {"id": "registro_senescyt", "type": "REGISTRO_SENESCYT",
      "description": ("Registro de título de la SENESCYT (Ecuador): documento que "
@@ -136,12 +449,59 @@ _CLASIF_SENESCYT = {"classifications": [
      "description": "Cualquier otro documento que no sea un registro de título de la SENESCYT."},
 ]}
 
+_CLASIF_PAGO = {"classifications": [
+    {"id": "classification1", "type": "other",
+     "description": ("Use the `other` document type when the provided document can not "
+                     "clearly be classified into one of the described classifications.")},
+    {"id": "classification_7nc", "type": "deposito",
+     "description": (
+         "Bank deposit receipt or voucher issued by any Ecuadorian financial \n"
+         "institution. This document certifies that a cash deposit was made \n"
+         "into a bank account.\n\n"
+         "DISTINCTIVE FEATURES:\n"
+         "- Printed or stamped header with the bank's name and logo\n"
+         "  (Banco Pichincha, Banco Guayaquil, Banco Pacífico, Produbanco, \n"
+         "  Banco Internacional, Cooperativas, etc.)\n"
+         "- Document type label: \"DEPÓSITO\", \"COMPROBANTE DE DEPÓSITO\", \n"
+         "  \"PAPELETA DE DEPÓSITO\" or similar\n"
+         "- Contains: account number, depositor name, deposit amount, \n"
+         "  date and time, branch or agency, transaction reference number\n"
+         "- May include a bank teller stamp or validation seal\n"
+         "- Can be presented as a physical scan or a printed digital receipt\n"
+         "- Amount is displayed prominently, typically in USD\n\n"
+         "EXCLUDE: Wire transfers, online transfers, payment confirmations \n"
+         "without a deposit slip format.")},
+    {"id": "classification_EWR", "type": "transferencia",
+     "description": (
+         "Electronic bank transfer confirmation or receipt issued by any \n"
+         "Ecuadorian financial institution or payment platform. This document \n"
+         "certifies that funds were moved electronically between accounts.\n\n"
+         "DISTINCTIVE FEATURES:\n"
+         "- Header with the bank or platform name and logo\n"
+         "  (Banco Pichincha, Banco Guayaquil, BCE - Banco Central del Ecuador,\n"
+         "  Produbanco, Cooperativas, PayPhone, etc.)\n"
+         "- Document type label: \"TRANSFERENCIA\", \"COMPROBANTE DE TRANSFERENCIA\",\n"
+         "  \"TRANSFERENCIA INTERBANCARIA\", \"CONFIRMACIÓN DE TRANSFERENCIA\" or similar\n"
+         "- Contains: origin account, destination account, beneficiary name,\n"
+         "  transfer amount in USD, date and time, transaction or authorization code\n"
+         "- May show SPI (Sistema de Pagos Interbancarios) reference for \n"
+         "  interbank transfers\n"
+         "- Can be a printed PDF, screenshot, or digital receipt\n"
+         "- Transaction status must show: \"EXITOSA\", \"APROBADA\", \"COMPLETADA\" \n"
+         "  or equivalent confirmation\n\n"
+         "EXCLUDE: Deposit slips, payment orders pending approval, \n"
+         "failed or rejected transaction confirmations.")},
+]}
+
 SEMILLA = [
     ("validar-identidad", "clasificar", "", "inline", None, None, None, UMBRAL_DEFECTO),
     ("validar-identidad", "extraer", "CEDULA", "inline", None, None, _ESQUEMA_CEDULA, None),
     ("validar-identidad", "extraer", "PASAPORTE", "inline", None, None, _ESQUEMA_PASAPORTE, None),
     ("validar-registro-senescyt", "clasificar", "", "inline", None, None, _CLASIF_SENESCYT, UMBRAL_DEFECTO),
     ("validar-registro-senescyt", "extraer", "REGISTRO_SENESCYT", "inline", None, None, _ESQUEMA_SENESCYT, None),
+    ("validar-pago", "clasificar", "", "inline", None, None, _CLASIF_PAGO, UMBRAL_DEFECTO),
+    ("validar-pago", "extraer", "DEPOSITO", "inline", None, None, _ESQUEMA_DEPOSITO, None),
+    ("validar-pago", "extraer", "TRANSFERENCIA", "inline", None, None, _ESQUEMA_TRANSFERENCIA, None),
     ("ocr", "parse", "", "inline", None, None, {"target": "markdown"}, None),
 ]
 

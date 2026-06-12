@@ -15,6 +15,9 @@ jinja2
 # --- Cliente HTTP asíncrono para la API de Extend ---
 httpx
 
+# --- Reintentos de fallos transitorios (red/429/5xx) en las llamadas a Extend ---
+tenacity
+
 # --- Base de datos PostgreSQL (API keys y clasificaciones) ---
 psycopg2-binary
 
