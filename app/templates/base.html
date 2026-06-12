@@ -32,6 +32,27 @@
     --md-elev-3: 0 4px 8px 3px rgba(0,0,0,.15), 0 1px 3px rgba(0,0,0,.30);
   }
 
+  /* ============ Tema oscuro — tokens dark de MD3 (se activan con html.oscuro) ============ */
+  html.oscuro {
+    --md-primary: #D0BCFF;            --md-on-primary: #381E72;
+    --md-primary-container: #4F378B;  --md-on-primary-container: #EADDFF;
+    --md-secondary: #CCC2DC;          --md-on-secondary: #332D41;
+    --md-secondary-container: #4A4458;--md-on-secondary-container: #E8DEF8;
+    --md-error: #F2B8B5;              --md-on-error: #601410;
+    --md-error-container: #8C1D18;    --md-on-error-container: #F9DEDC;
+    --md-surface: #141218;            --md-on-surface: #E6E0E9;
+    --md-on-surface-variant: #CAC4D0;
+    --md-surface-container-lowest: #0F0D13;
+    --md-surface-container: #211F26;
+    --md-surface-container-high: #2B2930;
+    --md-outline: #938F99;            --md-outline-variant: #49454F;
+    --md-inverse-surface: #E6E0E9;    --md-inverse-on-surface: #322F35;
+    /* Verde "éxito" armonizado para fondo oscuro (contenedor/tono invertidos) */
+    --md-exito-container: #0E5223;    --md-on-exito-container: #D7EFD9;
+  }
+  /* El loader usa un velo claro fijo; en oscuro se invierte para no cegar. */
+  html.oscuro #cargador { background: rgba(20, 18, 24, .55); }
+
   * { box-sizing: border-box; }
   body {
     font-family: Roboto, "Segoe UI", system-ui, sans-serif;
@@ -235,9 +256,12 @@
   // parpadea el login al navegar entre páginas (cada navegación es una recarga,
   // y este script corre antes de que jQuery se descargue).
   try {
-    if (sessionStorage.getItem("admin_api_key")) {
-      document.documentElement.className += " con-sesion";
-    }
+    var _cls = "";
+    if (sessionStorage.getItem("admin_api_key")) _cls += " con-sesion";
+    // Tema (claro/oscuro) persistido entre sesiones: se aplica ANTES de pintar
+    // para que no haya destello del tema contrario al cargar/navegar.
+    if (localStorage.getItem("tema") === "oscuro") _cls += " oscuro";
+    document.documentElement.className += _cls;
   } catch (e) {}
 </script>
 </head>
@@ -267,6 +291,7 @@
         <a class="nav-item {{ 'activa' if pagina == 'consultas' else '' }}" href="/admin/consultas">🛢️ <span>Consultas SQL</span></a>
       </nav>
       <div class="aside-pie">
+        <button class="btn-suave" id="btn-tema" onclick="alternarTema()">🌙 Modo noche</button>
         <button class="btn-suave" onclick="reiniciarCache()">♻️ Reiniciar caché</button>
         <button class="btn-suave" onclick="salir()">🚪 Salir</button>
       </div>
@@ -327,6 +352,22 @@ async function reiniciarCache() {
     avisar("No se pudo reiniciar la caché.", true);
   }
 }
+
+// --- Tema claro/oscuro ---
+// Alterna el tema, lo persiste en localStorage (entre sesiones) y actualiza el
+// botón. El tema ya se aplicó antes de pintar vía el script del <head>.
+function alternarTema() {
+  const oscuro = document.documentElement.classList.toggle("oscuro");
+  try { localStorage.setItem("tema", oscuro ? "oscuro" : "claro"); } catch (e) {}
+  actualizarBotonTema(oscuro);
+}
+
+function actualizarBotonTema(oscuro) {
+  $("#btn-tema").html(oscuro ? "☀️ Modo día" : "🌙 Modo noche");
+}
+
+// El botón refleja el tema vigente al cargar (el botón ya está en el DOM).
+actualizarBotonTema(document.documentElement.classList.contains("oscuro"));
 
 // --- Loader global ---
 // Cubre toda la pantalla mientras hay peticiones en vuelo: evita los dobles
