@@ -141,6 +141,22 @@ _CLAVES_PASAPORTE = (
     "numero_pasaporte", "pasaporte", "numero_documento",
     "numero_identificacion", "numero",
 )
+# Claves bajo las que el extractor SENESCYT puede devolver el nombre del titular.
+_CLAVES_NOMBRE = (
+    "nombres_completos", "nombres_apellidos", "nombre_completo",
+    "nombres_y_apellidos", "nombres",
+)
+
+
+def normalizar_nombre(valor) -> str:
+    """
+    Normaliza un nombre para compararlo sin importar el orden de los tokens:
+    minúsculas, sin tildes y con las palabras ordenadas alfabéticamente. Así
+    'MOLINA JARAMILLO CARLOS ANDRES' y 'Carlos Andrés Molina Jaramillo'
+    resultan iguales.
+    """
+    tokens = re.findall(r"[a-z0-9]+", _normalizar_busqueda(str(valor or "")))
+    return " ".join(sorted(tokens))
 
 
 def valor_en_datos(datos: dict, claves: tuple):
@@ -376,15 +392,23 @@ class ServicioDocumentos:
         self,
         contenido: bytes,
         mime_type: str,
+        numero_identificacion: str,
+        nombres: str,
         nombre: str = "",
     ) -> dict:
         """
-        Valida que el documento sea un registro de título de la SENESCYT: el
-        clasificador lo reconoce como REGISTRO_SENESCYT con confianza suficiente
-        y el extractor logra leer información. Es válido solo si se cumplen ambas;
-        un SENESCYT sin datos indica fallo del extractor o documento ilegible.
-        Usa clasificador + extractor (sin OCR); el extractor se configura por ruta
-        en la tabla `procesadores`.
+        Valida que el documento sea un registro de título de la SENESCYT y que
+        pertenezca a la persona indicada. El clasificador debe reconocerlo como
+        REGISTRO_SENESCYT con confianza suficiente, el extractor debe leer su
+        información y esta debe coincidir con `numero_identificacion` y `nombres`:
+
+          - identificación: se compara ignorando espacios y caracteres especiales.
+          - nombres: se comparan en minúsculas, sin tildes y con los tokens
+            ordenados, para tolerar diferencias en el orden de los nombres.
+
+        Es válido solo si se cumplen las tres condiciones. Usa clasificador +
+        extractor (sin OCR); el extractor se configura por ruta en la tabla
+        `procesadores`.
         """
         preprocesar(contenido, mime_type)
         file_id = await extend.subir_archivo(contenido, mime_type, nombre)
@@ -398,14 +422,25 @@ class ServicioDocumentos:
         if es_senescyt:
             datos = await self._extraer_datos(RUTA_SENESCYT, clase, file_id)
 
-        # Es válido solo si además el extractor pudo leer información: un SENESCYT
-        # sin datos significa que el extractor falló o el documento no es legible.
-        es_valido = es_senescyt and bool(datos)
+        # La identidad del sistema debe coincidir con la extraída del documento.
+        id_documento = normalizar_identificacion(valor_en_datos(datos, _CLAVES_NUMERO))
+        nombre_documento = normalizar_nombre(valor_en_datos(datos, _CLAVES_NOMBRE))
+        coincide_identificacion = (
+            bool(id_documento) and normalizar_identificacion(numero_identificacion) == id_documento
+        )
+        coincide_nombres = (
+            bool(nombre_documento) and normalizar_nombre(nombres) == nombre_documento
+        )
+
+        # Es válido solo si es un SENESCYT legible Y la identidad coincide.
+        es_valido = es_senescyt and bool(datos) and coincide_identificacion and coincide_nombres
 
         return {
             "clase_detectada": clase,
             "confianza": confianza,
             "es_valido": es_valido,
+            "coincide_identificacion": coincide_identificacion,
+            "coincide_nombres": coincide_nombres,
             "datos": datos,
         }
 

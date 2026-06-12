@@ -771,12 +771,17 @@ check("tiene su clasificador y su extractor",
 MOCK_CLASIFICACION.update({"type": "REGISTRO_SENESCYT", "confidence": 0.96})
 MOCK_EXTRACCION.clear()
 MOCK_EXTRACCION.update({"numero_registro": "1234-2026-ABC", "titulo": "Magíster en Educación",
-                        "institucion": "Universidad Casa Grande"})
+                        "institucion": "Universidad Casa Grande",
+                        "numero_identificacion": "0942112129",
+                        "nombres_completos": "MOLINA JARAMILLO CARLOS ANDRES"})
+# La identidad llega con otro orden de nombres y con separadores en la cédula:
+# la normalización (orden de tokens / sin caracteres especiales) debe igualarlas.
+SEN_OK = {"numero_identificacion": "094-211.2129", "nombres": "Carlos Andrés Molina Jaramillo"}
 reiniciar_capturas()
-r = cliente.post("/api/v1/validaciones/validar-registro-senescyt/", files=ARCHIVO, headers=H)
+r = cliente.post("/api/v1/validaciones/validar-registro-senescyt/", files=ARCHIVO, data=SEN_OK, headers=H)
 check("validar-registro-senescyt -> 200", r.status_code == 200, r.text[:300])
 d = r.json() if r.status_code == 200 else {}
-check("reconoce el registro (result True)", d.get("result") is True)
+check("reconoce el registro y la identidad coincide (result True)", d.get("result") is True, r.text[:300])
 check("devuelve los datos extraídos",
       (d.get("datos") or {}).get("numero_registro") == "1234-2026-ABC")
 cls = CAPTURAS["/classify"][-1].get("config", {}).get("classifications", [])
@@ -785,16 +790,28 @@ check("clasifica con las clasificaciones propias de la ruta",
 ext = CAPTURAS["/extract"][-1].get("config", {}).get("schema", {}).get("properties", {})
 check("extrae con el esquema SENESCYT", "numero_registro" in ext)
 
-# Reconocido como SENESCYT con datos -> válido, sin importar el número de registro.
-MOCK_EXTRACCION.clear()
-MOCK_EXTRACCION.update({"titulo": "Magíster", "institucion": "UCG"})
-r = cliente.post("/api/v1/validaciones/validar-registro-senescyt/", files=ARCHIVO, headers=H)
-check("reconocido como SENESCYT con datos -> result True",
-      r.status_code == 200 and r.json().get("result") is True, r.text[:200])
+# Faltan los parámetros obligatorios -> 422.
+check("sin numero_identificacion ni nombres -> 422",
+      cliente.post("/api/v1/validaciones/validar-registro-senescyt/",
+                   files=ARCHIVO, headers=H).status_code == 422)
+
+# SENESCYT con datos pero la identificación NO coincide -> result False.
+r = cliente.post("/api/v1/validaciones/validar-registro-senescyt/", files=ARCHIVO,
+                 data={"numero_identificacion": "1700000000", "nombres": "Carlos Andrés Molina Jaramillo"},
+                 headers=H)
+check("identificación distinta -> result False", r.json().get("result") is False, r.text[:200])
+check("el mensaje señala el número de identificación",
+      "identificación" in (r.json().get("message") or ""))
+
+# SENESCYT con datos pero los nombres NO coinciden -> result False.
+r = cliente.post("/api/v1/validaciones/validar-registro-senescyt/", files=ARCHIVO,
+                 data={"numero_identificacion": "0942112129", "nombres": "Juan Pérez"}, headers=H)
+check("nombres distintos -> result False", r.json().get("result") is False, r.text[:200])
+check("el mensaje señala los nombres", "nombres" in (r.json().get("message") or ""))
 
 # Reconocido como SENESCYT pero SIN datos -> inválido (falló el extractor).
 MOCK_EXTRACCION.clear()
-r = cliente.post("/api/v1/validaciones/validar-registro-senescyt/", files=ARCHIVO, headers=H)
+r = cliente.post("/api/v1/validaciones/validar-registro-senescyt/", files=ARCHIVO, data=SEN_OK, headers=H)
 check("SENESCYT sin datos -> result False",
       r.status_code == 200 and r.json().get("result") is False, r.text[:200])
 check("el mensaje avisa que falló el extractor / documento ilegible",
@@ -804,7 +821,7 @@ MOCK_EXTRACCION.update({"numero_registro": "1234-2026-ABC", "titulo": "Magíster
                         "institucion": "Universidad Casa Grande"})
 
 MOCK_CLASIFICACION.update({"type": "CEDULA", "confidence": 0.97})
-r = cliente.post("/api/v1/validaciones/validar-registro-senescyt/", files=ARCHIVO, headers=H)
+r = cliente.post("/api/v1/validaciones/validar-registro-senescyt/", files=ARCHIVO, data=SEN_OK, headers=H)
 check("documento ajeno -> result False y datos vacíos",
       r.status_code == 200 and r.json().get("result") is False and r.json().get("datos") == {})
 
