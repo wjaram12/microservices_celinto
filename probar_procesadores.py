@@ -848,9 +848,10 @@ check("la ruta validar-registro-senescyt está en el catálogo",
       "validar-registro-senescyt" in rutas_cat)
 procs_sen = [p for p in cliente.get("/api/v1/procesadores/", headers=A).json()
              if p["ruta"] == "validar-registro-senescyt"]
-check("tiene su clasificador y su extractor",
+check("tiene su clasificador y un extractor por clase (3 clases + clasificar)",
       {(p["operacion"], p["clase"]) for p in procs_sen}
-      == {("clasificar", ""), ("extraer", "REGISTRO_SENESCYT")})
+      == {("clasificar", ""), ("extraer", "REGISTRO_SENESCYT"),
+          ("extraer", "CARTA_COMPROMISO_SUBIDA_TITULO"), ("extraer", "APOSTILLA")})
 
 MOCK_CLASIFICACION.update({"type": "REGISTRO_SENESCYT", "confidence": 0.96})
 MOCK_EXTRACCION.clear()
@@ -946,6 +947,44 @@ r = cliente.post("/api/v1/validaciones/validar-registro-senescyt/", files=ARCHIV
 check("documento ajeno -> result False y datos vacíos",
       r.status_code == 200 and r.json().get("result") is False and r.json().get("datos") == {})
 check("documento ajeno -> status no_reconocido", r.json().get("status") == "no_reconocido", r.text[:200])
+
+# --- Clases nuevas de la ruta: carta de compromiso y apostilla ---
+# (cada una con su extractor; comparan identidad igual que el registro SENESCYT).
+def _validar_sen(data):
+    return cliente.post("/api/v1/validaciones/validar-registro-senescyt/",
+                        files=ARCHIVO, data=data, headers=H)
+
+# CARTA_COMPROMISO_SUBIDA_TITULO: reconocida, extrae y compara identidad.
+MOCK_CLASIFICACION.update({"type": "CARTA_COMPROMISO_SUBIDA_TITULO", "confidence": 0.95})
+MOCK_EXTRACCION.clear()
+MOCK_EXTRACCION.update({"numero_identificacion": "0942112129",
+                        "nombres_completos": "MOLINA JARAMILLO CARLOS ANDRES",
+                        "titulo": "Magíster en Educación"})
+reiniciar_capturas()
+d = _validar_sen(SEN_OK).json()
+check("carta de compromiso -> result True, clase y status extraido",
+      d.get("result") is True and d.get("status") == "extraido"
+      and d.get("document_class") == "CARTA_COMPROMISO_SUBIDA_TITULO", str(d)[:250])
+check("carta de compromiso -> compara identidad (match_document True)",
+      d.get("match_document") is True, str(d)[:250])
+props = CAPTURAS["/extract"][-1].get("config", {}).get("schema", {}).get("properties", {})
+check("usa el extractor de carta de compromiso (titulo, sin numero_registro)",
+      "titulo" in props and "numero_registro" not in props)
+
+# APOSTILLA: extractor distinto, match solo por nombres.
+MOCK_CLASIFICACION.update({"type": "APOSTILLA", "confidence": 0.95})
+MOCK_EXTRACCION.clear()
+MOCK_EXTRACCION.update({"numero_identificacion": "0942112129",
+                        "nombres_completos": "Carlos Andrés Molina Jaramillo",
+                        "numero_apostilla": "AP-2026-001", "pais_emisor": "España"})
+reiniciar_capturas()
+d = _validar_sen({"nombres": "molina jaramillo carlos andres"}).json()
+check("apostilla -> result True y clase APOSTILLA",
+      d.get("result") is True and d.get("document_class") == "APOSTILLA", str(d)[:250])
+check("apostilla -> match por nombres True", d.get("match_document") is True, str(d)[:250])
+props = CAPTURAS["/extract"][-1].get("config", {}).get("schema", {}).get("properties", {})
+check("usa el extractor de apostilla (numero_apostilla / pais_emisor)",
+      "numero_apostilla" in props and "pais_emisor" in props)
 
 MOCK_CLASIFICACION.update({"type": "CEDULA", "confidence": 0.95})
 MOCK_EXTRACCION.clear()

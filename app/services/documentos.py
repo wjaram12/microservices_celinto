@@ -26,9 +26,14 @@ CLASE_CEDULA = "CEDULA"
 CLASE_PASAPORTE = "PASAPORTE"
 PREFIJO_PASAPORTE = "VS-"
 CLASE_SENESCYT = "REGISTRO_SENESCYT"
+CLASE_CARTA_COMPROMISO = "CARTA_COMPROMISO_SUBIDA_TITULO"
+CLASE_APOSTILLA = "APOSTILLA"
 CLASE_DEPOSITO = "DEPOSITO"
 CLASE_TRANSFERENCIA = "TRANSFERENCIA"
 TIPOS_IDENTIDAD = {CLASE_CEDULA, CLASE_PASAPORTE}
+# Clases aceptadas por la ruta validar-registro-senescyt: las tres comparan
+# identidad igual (numero_identificacion / nombres) y cada una tiene su extractor.
+TIPOS_SENESCYT = {CLASE_SENESCYT, CLASE_CARTA_COMPROMISO, CLASE_APOSTILLA}
 TIPOS_PAGO = {CLASE_DEPOSITO, CLASE_TRANSFERENCIA}
 FORMATOS_ACEPTADOS = {"application/pdf", "image/jpeg", "image/png"}
 MAX_BYTES = 10 * 1024 * 1024
@@ -505,8 +510,10 @@ class ServicioDocumentos:
         file_id = await extend.subir_archivo(contenido, mime_type, nombre)
         clase, confianza, umbral = await self._clasificar_archivo(file_id, RUTA_SENESCYT)
 
-        # El clasificador lo reconoce como registro SENESCYT.
-        es_senescyt = clase == CLASE_SENESCYT and confianza >= umbral
+        # El clasificador lo reconoce como una de las clases aceptadas por la ruta
+        # (registro SENESCYT, carta de compromiso de subida de título o apostilla).
+        # Las tres comparan identidad igual; el extractor se elige por clase.
+        es_senescyt = clase in TIPOS_SENESCYT and confianza >= umbral
 
         datos = {}
         if es_senescyt:

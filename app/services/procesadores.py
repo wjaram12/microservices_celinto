@@ -127,6 +127,32 @@ _ESQUEMA_SENESCYT = {
     },
 }
 
+# NOTA: esquemas placeholder. Incluyen los campos de identidad
+# (numero_identificacion / nombres_completos) que usa la comparación de identidad
+# de la ruta; reemplazar las propiedades por el JSON Schema real cuando esté.
+_ESQUEMA_CARTA_COMPROMISO = {
+    "type": "object",
+    "properties": {
+        "numero_identificacion": _campo("Número de identificación (cédula o pasaporte) del firmante."),
+        "nombres_completos": _campo("Nombres y apellidos completos del firmante."),
+        "titulo": _campo("Título o programa al que se compromete a subir el documento."),
+        "institucion": _campo("Institución de Educación Superior relacionada, si aparece."),
+        "fecha": _campo("Fecha de la carta de compromiso."),
+    },
+}
+
+_ESQUEMA_APOSTILLA = {
+    "type": "object",
+    "properties": {
+        "numero_identificacion": _campo("Número de identificación del titular del documento apostillado."),
+        "nombres_completos": _campo("Nombres y apellidos completos del titular."),
+        "numero_apostilla": _campo("Número de la apostilla."),
+        "pais_emisor": _campo("País que emite la apostilla."),
+        "autoridad": _campo("Autoridad que certifica la apostilla."),
+        "fecha": _campo("Fecha de emisión de la apostilla."),
+    },
+}
+
 _ESQUEMA_DEPOSITO = {
     "type": "object",
     "properties": {
@@ -445,8 +471,19 @@ _CLASIF_SENESCYT = {"classifications": [
      "description": ("Registro de título de la SENESCYT (Ecuador): documento que "
                      "certifica el registro de un título académico, con número de "
                      "registro, titular, institución de educación superior y título.")},
+    {"id": "carta_compromiso_subida_titulo", "type": "CARTA_COMPROMISO_SUBIDA_TITULO",
+     "description": ("Carta de compromiso de subida de título: documento en el que el "
+                     "aspirante se compromete a entregar o registrar su título académico "
+                     "ante la institución, con nombres del firmante y, normalmente, su "
+                     "número de identificación. (placeholder — reemplazar por el prompt real)")},
+    {"id": "apostilla", "type": "APOSTILLA",
+     "description": ("Apostilla (Convención de La Haya): certificación que legaliza un "
+                     "documento público para uso internacional, con número de apostilla, "
+                     "país y autoridad emisora, y datos del titular del documento. "
+                     "(placeholder — reemplazar por el prompt real)")},
     {"id": "otros", "type": "other",
-     "description": "Cualquier otro documento que no sea un registro de título de la SENESCYT."},
+     "description": ("Cualquier otro documento que no sea un registro de título de la "
+                     "SENESCYT, una carta de compromiso de subida de título ni una apostilla.")},
 ]}
 
 _CLASIF_PAGO = {"classifications": [
@@ -499,6 +536,8 @@ SEMILLA = [
     ("validar-identidad", "extraer", "PASAPORTE", "inline", None, None, _ESQUEMA_PASAPORTE, None),
     ("validar-registro-senescyt", "clasificar", "", "inline", None, None, _CLASIF_SENESCYT, UMBRAL_DEFECTO),
     ("validar-registro-senescyt", "extraer", "REGISTRO_SENESCYT", "inline", None, None, _ESQUEMA_SENESCYT, None),
+    ("validar-registro-senescyt", "extraer", "CARTA_COMPROMISO_SUBIDA_TITULO", "inline", None, None, _ESQUEMA_CARTA_COMPROMISO, None),
+    ("validar-registro-senescyt", "extraer", "APOSTILLA", "inline", None, None, _ESQUEMA_APOSTILLA, None),
     ("validar-pago", "clasificar", "", "inline", None, None, _CLASIF_PAGO, UMBRAL_DEFECTO),
     ("validar-pago", "extraer", "DEPOSITO", "inline", None, None, _ESQUEMA_DEPOSITO, None),
     ("validar-pago", "extraer", "TRANSFERENCIA", "inline", None, None, _ESQUEMA_TRANSFERENCIA, None),

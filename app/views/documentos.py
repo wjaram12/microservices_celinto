@@ -19,6 +19,15 @@ from app.services.errores import ErrorDeArchivo, ErrorDeProveedor, ErrorDeValida
 
 logger = logging.getLogger(__name__)
 
+# Etiqueta legible por clase para los mensajes de validar-registro-senescyt
+# (la ruta acepta tres tipos de documento). El artículo va incluido para que
+# encaje en "corresponde a {etiqueta}" / "Es {etiqueta}".
+ETIQUETAS_SENESCYT = {
+    "REGISTRO_SENESCYT": "un registro de título de la SENESCYT",
+    "CARTA_COMPROMISO_SUBIDA_TITULO": "una carta de compromiso de subida de título",
+    "APOSTILLA": "una apostilla",
+}
+
 api = APIRouter()
 
 
@@ -183,30 +192,32 @@ async def validar_registro_senescyt(
         raise HTTPException(status_code=500, detail="Error interno al procesar el documento.")
 
     identidad_solicitada = bool((numero_identificacion or "").strip() or (nombres or "").strip())
+    etiqueta = ETIQUETAS_SENESCYT.get(resultado["clase_detectada"], "el documento")
 
     if not resultado["es_senescyt"]:
-        mensaje = "El documento no fue reconocido como un registro de título de la SENESCYT."
+        mensaje = ("El documento no fue reconocido como un registro de título de la "
+                   "SENESCYT, una carta de compromiso de subida de título ni una apostilla.")
     elif not resultado["datos"]:
-        mensaje = ("El documento es un registro SENESCYT, pero no se pudo extraer la "
+        mensaje = (f"El documento corresponde a {etiqueta}, pero no se pudo extraer la "
                    "información; falló el extractor o el documento no tiene suficiente "
                    "claridad.")
     elif resultado["match_document"]:
-        mensaje = "Registro SENESCYT reconocido; la identidad coincide con la del documento."
+        mensaje = f"Documento reconocido como {etiqueta}; la identidad coincide con la del documento."
     elif resultado["match_document"] is False:
         difieren = []
         if resultado["coincide_identificacion"] is False:
             difieren.append("el número de identificación")
         if resultado["coincide_nombres"] is False:
             difieren.append("los nombres")
-        mensaje = ("Es un registro SENESCYT, pero " + " y ".join(difieren) +
+        mensaje = (f"Es {etiqueta}, pero " + " y ".join(difieren) +
                    " no coincide(n) con los datos proporcionados.")
     elif identidad_solicitada:
         # match_document None pese a haberse enviado datos: el documento no traía
         # los campos para contrastar la identidad.
-        mensaje = ("Registro SENESCYT reconocido, pero no se pudo leer del documento "
+        mensaje = (f"Documento reconocido como {etiqueta}, pero no se pudo leer del documento "
                    "la información para verificar la identidad.")
     else:
-        mensaje = "Registro SENESCYT reconocido; información extraída."
+        mensaje = f"Documento reconocido como {etiqueta}; información extraída."
 
     return RespuestaRegistroSenescyt(
         result=resultado["es_senescyt"],
