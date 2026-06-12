@@ -781,7 +781,8 @@ reiniciar_capturas()
 r = cliente.post("/api/v1/validaciones/validar-registro-senescyt/", files=ARCHIVO, data=SEN_OK, headers=H)
 check("validar-registro-senescyt -> 200", r.status_code == 200, r.text[:300])
 d = r.json() if r.status_code == 200 else {}
-check("reconoce el registro y la identidad coincide (result True)", d.get("result") is True, r.text[:300])
+check("reconoce el registro (result True)", d.get("result") is True, r.text[:300])
+check("ambos datos coinciden -> match_document True", d.get("match_document") is True, r.text[:300])
 check("devuelve los datos extraídos",
       (d.get("datos") or {}).get("numero_registro") == "1234-2026-ABC")
 cls = CAPTURAS["/classify"][-1].get("config", {}).get("classifications", [])
@@ -790,30 +791,35 @@ check("clasifica con las clasificaciones propias de la ruta",
 ext = CAPTURAS["/extract"][-1].get("config", {}).get("schema", {}).get("properties", {})
 check("extrae con el esquema SENESCYT", "numero_registro" in ext)
 
-# Faltan los parámetros obligatorios -> 422.
-check("sin numero_identificacion ni nombres -> 422",
-      cliente.post("/api/v1/validaciones/validar-registro-senescyt/",
-                   files=ARCHIVO, headers=H).status_code == 422)
+# Sin parámetros -> válido pero sin contrastar identidad (match_document None).
+r = cliente.post("/api/v1/validaciones/validar-registro-senescyt/", files=ARCHIVO, headers=H)
+check("sin parámetros -> result True", r.status_code == 200 and r.json().get("result") is True, r.text[:200])
+check("sin parámetros -> match_document None", r.json().get("match_document") is None, r.text[:200])
 
-# SENESCYT con datos pero la identificación NO coincide -> result False.
+# Solo nombres (los None no se validan): coincide -> match_document True.
+r = cliente.post("/api/v1/validaciones/validar-registro-senescyt/", files=ARCHIVO,
+                 data={"nombres": "molina jaramillo carlos andres"}, headers=H)
+check("solo nombres y coincide -> match_document True", r.json().get("match_document") is True, r.text[:200])
+
+# OR: identificación incorrecta pero nombres correctos -> match_document True.
 r = cliente.post("/api/v1/validaciones/validar-registro-senescyt/", files=ARCHIVO,
                  data={"numero_identificacion": "1700000000", "nombres": "Carlos Andrés Molina Jaramillo"},
                  headers=H)
-check("identificación distinta -> result False", r.json().get("result") is False, r.text[:200])
-check("el mensaje señala el número de identificación",
-      "identificación" in (r.json().get("message") or ""))
+check("uno coincide -> match_document True", r.json().get("match_document") is True, r.text[:200])
 
-# SENESCYT con datos pero los nombres NO coinciden -> result False.
+# Ninguno coincide -> match_document False (pero sigue siendo un SENESCYT: result True).
 r = cliente.post("/api/v1/validaciones/validar-registro-senescyt/", files=ARCHIVO,
-                 data={"numero_identificacion": "0942112129", "nombres": "Juan Pérez"}, headers=H)
-check("nombres distintos -> result False", r.json().get("result") is False, r.text[:200])
-check("el mensaje señala los nombres", "nombres" in (r.json().get("message") or ""))
+                 data={"numero_identificacion": "1700000000", "nombres": "Juan Pérez"}, headers=H)
+check("ninguno coincide -> match_document False", r.json().get("match_document") is False, r.text[:200])
+check("es SENESCYT legible -> result True aunque no coincida", r.json().get("result") is True, r.text[:200])
+check("el mensaje señala identificación y nombres",
+      "identificación" in (r.json().get("message") or "") and "nombres" in (r.json().get("message") or ""))
 
-# Reconocido como SENESCYT pero SIN datos -> inválido (falló el extractor).
+# SENESCYT pero SIN datos: result sigue la clase (True), pero avisa del extractor.
 MOCK_EXTRACCION.clear()
 r = cliente.post("/api/v1/validaciones/validar-registro-senescyt/", files=ARCHIVO, data=SEN_OK, headers=H)
-check("SENESCYT sin datos -> result False",
-      r.status_code == 200 and r.json().get("result") is False, r.text[:200])
+check("SENESCYT sin datos -> result True (refleja la clasificación)",
+      r.status_code == 200 and r.json().get("result") is True, r.text[:200])
 check("el mensaje avisa que falló el extractor / documento ilegible",
       "extractor" in (r.json().get("message") or ""))
 MOCK_EXTRACCION.clear()

@@ -159,6 +159,18 @@ def normalizar_nombre(valor) -> str:
     return " ".join(sorted(tokens))
 
 
+def comparar_campo(valor_sistema, valor_documento, normalizador) -> Optional[bool]:
+    """
+    Compara un dato del sistema con el extraído del documento, ya normalizados.
+    Devuelve None si el dato del sistema viene vacío (no se valida ese campo);
+    en caso contrario True/False según coincidan.
+    """
+    if valor_sistema is None or not str(valor_sistema).strip():
+        return None
+    documento = normalizador(valor_documento)
+    return bool(documento) and normalizador(valor_sistema) == documento
+
+
 def valor_en_datos(datos: dict, claves: tuple):
     """Primer valor presente en los campos extraídos bajo alguna de las claves."""
     for clave in claves:
@@ -392,23 +404,26 @@ class ServicioDocumentos:
         self,
         contenido: bytes,
         mime_type: str,
-        numero_identificacion: str,
-        nombres: str,
+        numero_identificacion: Optional[str] = None,
+        nombres: Optional[str] = None,
         nombre: str = "",
     ) -> dict:
         """
-        Valida que el documento sea un registro de título de la SENESCYT y que
-        pertenezca a la persona indicada. El clasificador debe reconocerlo como
-        REGISTRO_SENESCYT con confianza suficiente, el extractor debe leer su
-        información y esta debe coincidir con `numero_identificacion` y `nombres`:
+        Valida que el documento sea un registro de título de la SENESCYT y, si se
+        envían, contrasta la identidad con la extraída. Como en validar-identidad,
+        `es_senescyt` (el `result`) refleja solo la clasificación: que el documento
+        sea reconocido como REGISTRO_SENESCYT con confianza suficiente, sin exigir
+        que la extracción traiga datos. Aparte, compara los datos del sistema con
+        los del documento:
 
           - identificación: se compara ignorando espacios y caracteres especiales.
           - nombres: se comparan en minúsculas, sin tildes y con los tokens
             ordenados, para tolerar diferencias en el orden de los nombres.
 
-        Es válido solo si se cumplen las tres condiciones. Usa clasificador +
-        extractor (sin OCR); el extractor se configura por ruta en la tabla
-        `procesadores`.
+        Solo se valida cada campo que se haya enviado (los None se omiten).
+        `match_document` es True si al menos uno de los enviados coincide, False si
+        ninguno, y None si no se envió ninguno. Usa clasificador + extractor (sin
+        OCR); el extractor se configura por ruta en la tabla `procesadores`.
         """
         preprocesar(contenido, mime_type)
         file_id = await extend.subir_archivo(contenido, mime_type, nombre)
@@ -422,23 +437,20 @@ class ServicioDocumentos:
         if es_senescyt:
             datos = await self._extraer_datos(RUTA_SENESCYT, clase, file_id)
 
-        # La identidad del sistema debe coincidir con la extraída del documento.
-        id_documento = normalizar_identificacion(valor_en_datos(datos, _CLAVES_NUMERO))
-        nombre_documento = normalizar_nombre(valor_en_datos(datos, _CLAVES_NOMBRE))
-        coincide_identificacion = (
-            bool(id_documento) and normalizar_identificacion(numero_identificacion) == id_documento
-        )
-        coincide_nombres = (
-            bool(nombre_documento) and normalizar_nombre(nombres) == nombre_documento
-        )
-
-        # Es válido solo si es un SENESCYT legible Y la identidad coincide.
-        es_valido = es_senescyt and bool(datos) and coincide_identificacion and coincide_nombres
+        # Contraste de identidad: solo se evalúan los campos enviados (los None se
+        # omiten). match_document es True si al menos uno de los enviados coincide.
+        coincide_identificacion = comparar_campo(
+            numero_identificacion, valor_en_datos(datos, _CLAVES_NUMERO), normalizar_identificacion)
+        coincide_nombres = comparar_campo(
+            nombres, valor_en_datos(datos, _CLAVES_NOMBRE), normalizar_nombre)
+        comparaciones = [c for c in (coincide_identificacion, coincide_nombres) if c is not None]
+        match_document = any(comparaciones) if comparaciones else None
 
         return {
             "clase_detectada": clase,
             "confianza": confianza,
-            "es_valido": es_valido,
+            "es_senescyt": es_senescyt,
+            "match_document": match_document,
             "coincide_identificacion": coincide_identificacion,
             "coincide_nombres": coincide_nombres,
             "datos": datos,

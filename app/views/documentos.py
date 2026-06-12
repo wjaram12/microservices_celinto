@@ -173,25 +173,26 @@ async def validar_documento(
 @api.post("/validaciones/validar-registro-senescyt/", response_model=RespuestaRegistroSenescyt, tags=["Validadores"])
 async def validar_registro_senescyt(
     file: UploadFile = File(...),
-    numero_identificacion: str = Form(
-        ...,
+    numero_identificacion: Optional[str] = Form(
+        None,
         description=(
-            "Número de identificación (cédula o pasaporte) del titular según el "
-            "sistema. Se compara con el extraído del documento ignorando espacios "
-            "y caracteres especiales."
+            "Opcional. Número de identificación (cédula o pasaporte) del titular "
+            "según el sistema. Si se envía, se compara con el extraído del documento "
+            "ignorando espacios y caracteres especiales."
         ),
     ),
-    nombres: str = Form(
-        ...,
+    nombres: Optional[str] = Form(
+        None,
         description=(
-            "Nombres y apellidos del titular según el sistema. Se comparan con los "
-            "extraídos sin distinguir mayúsculas, tildes ni el orden de los nombres."
+            "Opcional. Nombres y apellidos del titular según el sistema. Si se "
+            "envían, se comparan con los extraídos sin distinguir mayúsculas, tildes "
+            "ni el orden de los nombres."
         ),
     ),
 ):
-    """Valida que el documento sea un registro de título de la SENESCYT y que
-    pertenezca a la persona indicada (identificación y nombres), devolviendo la
-    información extraída por su extractor personalizado."""
+    """Valida que el documento sea un registro de título de la SENESCYT y, si se
+    envían `numero_identificacion` y/o `nombres`, contrasta la identidad con la
+    extraída, devolviendo la información del extractor personalizado."""
     contenido = await leer_archivo(file)
 
     try:
@@ -205,26 +206,29 @@ async def validar_registro_senescyt(
         logger.exception("Error procesando el documento en /validaciones/validar-registro-senescyt/")
         raise HTTPException(status_code=500, detail="Error interno al procesar el documento.")
 
-    if resultado["es_valido"]:
-        mensaje = "Registro SENESCYT validado; la identidad coincide con la del documento."
-    elif resultado["clase_detectada"] != srv.CLASE_SENESCYT:
+    if not resultado["es_senescyt"]:
         mensaje = "El documento no fue reconocido como un registro de título de la SENESCYT."
     elif not resultado["datos"]:
-        mensaje = ("El documento parece un registro SENESCYT, pero no se pudo extraer "
-                   "la información; falló el extractor o el documento no tiene "
-                   "suficiente claridad.")
+        mensaje = ("El documento es un registro SENESCYT, pero no se pudo extraer la "
+                   "información; falló el extractor o el documento no tiene suficiente "
+                   "claridad.")
+    elif resultado["match_document"] is None:
+        mensaje = "Registro SENESCYT reconocido; información extraída."
+    elif resultado["match_document"]:
+        mensaje = "Registro SENESCYT reconocido; la identidad coincide con la del documento."
     else:
         difieren = []
-        if not resultado["coincide_identificacion"]:
+        if resultado["coincide_identificacion"] is False:
             difieren.append("el número de identificación")
-        if not resultado["coincide_nombres"]:
+        if resultado["coincide_nombres"] is False:
             difieren.append("los nombres")
         mensaje = ("Es un registro SENESCYT, pero " + " y ".join(difieren) +
                    " no coincide(n) con los datos proporcionados.")
 
     return RespuestaRegistroSenescyt(
-        result=resultado["es_valido"],
+        result=resultado["es_senescyt"],
         message=mensaje,
+        match_document=resultado["match_document"],
         document_class=resultado["clase_detectada"],
         confidence=resultado["confianza"],
         datos=resultado["datos"],
