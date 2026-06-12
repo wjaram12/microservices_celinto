@@ -23,7 +23,8 @@ from app.services.procesadores import procesadores
 from app.services.prompts import prompts
 from app.services.rutas import rutas
 from app.views import (
-    adm_cache, adm_consumidores, adm_procesadores, adm_prompts, adm_rutas, documentos,
+    adm_cache, adm_consultas, adm_consumidores, adm_procesadores, adm_prompts,
+    adm_rutas, documentos,
 )
 
 app = FastAPI(
@@ -37,14 +38,15 @@ prompts.inicializar()
 rutas.inicializar()
 procesadores.inicializar()
 
-for view in (documentos, adm_prompts, adm_rutas, adm_procesadores, adm_consumidores, adm_cache):
+for view in (documentos, adm_prompts, adm_rutas, adm_procesadores, adm_consumidores,
+             adm_cache, adm_consultas):
     app.include_router(
         view.api,
         prefix="/api/v1",
         dependencies=[Depends(verificar_api_key)],
     )
 
-for view in (adm_procesadores, adm_rutas, adm_consumidores):
+for view in (adm_procesadores, adm_rutas, adm_consumidores, adm_consultas):
     app.include_router(view.paginas)
 
 app.mount("/static", StaticFiles(directory=Path(__file__).resolve().parent / "static"), name="static")

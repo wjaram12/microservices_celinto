@@ -55,6 +55,8 @@ class Cur:
     def __init__(self, dict_mode=False):
         self._r = []
         self.rowcount = -1
+        self.description = None      # lo usa la consola SQL para distinguir consulta/comando
+        self.statusmessage = None
 
     def __enter__(self):
         return self
@@ -65,6 +67,15 @@ class Cur:
     def execute(self, sql, p=None):
         low = " ".join(sql.split()).lower()
         p = p or ()
+        # Sentinels de la consola SQL (Fase 14): exactos, no chocan con el resto.
+        if low == "select 1 as uno":
+            self.description = [type("Col", (), {"name": "uno"})()]
+            self._r = [[1]]
+            return
+        if low == "update procesadores set activo = activo where id = 0":
+            self.rowcount = 0
+            self.statusmessage = "UPDATE 0"
+            return
         if low.startswith("create table") or low.startswith("alter table"):
             return
         if low.startswith("select count"):
@@ -210,6 +221,9 @@ class Cur:
 
     def fetchall(self):
         return list(self._r)
+
+    def fetchmany(self, n=None):
+        return list(self._r if n is None else self._r[:n])
 
     def executemany(self, sql, seq):
         for p in seq:
@@ -1123,6 +1137,34 @@ check("Retry-After numérico se lee en segundos", _leer_retry_after(_Resp({"Retr
 check("Retry-After ausente -> None (usa backoff)", _leer_retry_after(_Resp({})) is None)
 check("Retry-After con fecha HTTP -> None (usa backoff)",
       _leer_retry_after(_Resp({"Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"})) is None)
+
+
+# ================== FASE 14: consola SQL de administración ==================
+print("\n=== Fase 14: consola SQL (/admin/consultas) ===")
+r = cliente.get("/admin/consultas")
+check("/admin/consultas -> 200 y renderiza su plantilla",
+      r.status_code == 200 and 'id="sql"' in r.text, f"HTTP {r.status_code}")
+check("la consola aparece en la navegación del panel", 'href="/admin/consultas"' in r.text)
+check("ping /consultas/ requiere admin (consumo -> 403)",
+      cliente.get("/api/v1/consultas/", headers=H).status_code == 403)
+r = cliente.get("/api/v1/consultas/", headers=A)
+check("ping /consultas/ con admin -> 200 ok", r.status_code == 200 and r.json().get("ok") is True)
+check("ejecutar sin admin -> 403",
+      cliente.post("/api/v1/consultas/", json={"sql": "SELECT 1 AS uno"}, headers=H).status_code == 403)
+
+r = cliente.post("/api/v1/consultas/", json={"sql": "SELECT 1 AS uno"}, headers=A)
+d = r.json() if r.status_code == 200 else {}
+check("SELECT -> tipo consulta con columnas y filas",
+      d.get("tipo") == "consulta" and d.get("columnas") == ["uno"] and d.get("filas") == [[1]], r.text[:200])
+
+r = cliente.post("/api/v1/consultas/",
+                 json={"sql": "UPDATE procesadores SET activo = activo WHERE id = 0"}, headers=A)
+d = r.json() if r.status_code == 200 else {}
+check("comando (UPDATE) -> tipo comando con rowcount",
+      d.get("tipo") == "comando" and d.get("rowcount") == 0, r.text[:200])
+check("tras un comando, la respuesta reinicia la caché", "cache_reiniciada" in d)
+check("SQL vacío -> 400",
+      cliente.post("/api/v1/consultas/", json={"sql": "   "}, headers=A).status_code == 400)
 
 
 print("\n" + ("=" * 50))

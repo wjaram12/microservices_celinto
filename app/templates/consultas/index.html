@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+{% block titulo %}Consultas SQL · Administración{% endblock %}
+{% block titulo_pagina %}🛢️ Consultas SQL{% endblock %}
+{% block subtitulo %}Consola para ejecutar consultas y comandos directamente sobre la base del servicio.{% endblock %}
+
+{% block contenido %}
+<div class="tarjeta" style="border-left:4px solid var(--md-error)">
+  <b>⚠ Herramienta de administración.</b>
+  Ejecuta SQL directo contra la base de producción. Una sentencia mal escrita puede
+  modificar o borrar datos sin vuelta atrás. Tras un <code>INSERT/UPDATE/DELETE</code>
+  la caché se reinicia sola para que los cambios de configuración tomen efecto.
+</div>
+
+<div class="acciones" style="margin-bottom:10px">
+  <span class="meta" style="margin:0">Atajos:</span>
+  <button class="btn-suave" type="button" onclick="snippet('procs_pago')">Procesadores de validar-pago</button>
+  <button class="btn-suave" type="button" onclick="snippet('rutas')">Rutas</button>
+  <button class="btn-suave" type="button" onclick="snippet('clasifs')">Clasificaciones globales</button>
+</div>
+
+<textarea id="sql" spellcheck="false"
+          style="min-height:160px;font-family:Consolas,monospace;font-size:.9rem"
+          placeholder="SELECT id, ruta, operacion, clase, modo, activo FROM procesadores ORDER BY ruta;"></textarea>
+
+<div class="acciones">
+  <button class="btn-principal" onclick="ejecutar()">▶ Ejecutar (Ctrl+Enter)</button>
+  <span id="resumen" class="meta" style="margin:0"></span>
+</div>
+
+<div id="error-box" class="tarjeta oculto"
+     style="border-left:4px solid var(--md-error);white-space:pre-wrap;font-family:Consolas,monospace;font-size:.82rem;color:var(--md-on-error-container);background:var(--md-error-container)"></div>
+
+<div id="resultado" class="tabla-envoltura oculto" style="margin-top:14px">
+  <table class="tabla">
+    <thead><tr id="res-cabecera"></tr></thead>
+    <tbody id="res-cuerpo"></tbody>
+  </table>
+</div>
+{% endblock %}
+
+{% block js %}
+<script>
+const API_CONSULTAS = "/api/v1/consultas/";
+
+const SNIPPETS = {
+  procs_pago: "SELECT id, ruta, operacion, clase, modo, activo,\n       (esquema IS NOT NULL) AS tiene_esquema\nFROM procesadores\nWHERE ruta = 'validar-pago'\nORDER BY operacion, clase;",
+  rutas: "SELECT clave, url, activo FROM rutas ORDER BY clave;",
+  clasifs: "SELECT clave, tipo, activo FROM clasificaciones ORDER BY clave;",
+};
+
+function snippet(clave) {
+  $("#sql").val(SNIPPETS[clave] || "").focus();
+}
+
+// La página valida la clave admin con un ping (no ejecuta SQL).
+async function cargarDatos() {
+  const { status, ok, cuerpo } = await llamar(API_CONSULTAS);
+  if (!ok) {
+    if (status === 401 || status === 403) {
+      avisar("Clave inválida o sin permisos de administrador.", true);
+    } else {
+      avisar((cuerpo && cuerpo.detail) || `No se pudo validar la sesión (HTTP ${status}).`, true);
+    }
+    return false;
+  }
+  return true;
+}
+
+// Heurística: ¿la sentencia probablemente MODIFICA datos? (para pedir confirmación)
+function esEscritura(sql) {
+  const limpio = sql.trim().toLowerCase();
+  return !/^(select|with|explain|show|table|values)\b/.test(limpio);
+}
+
+async function ejecutar() {
+  const sql = $("#sql").val().trim();
+  if (!sql) { avisar("Escribe una sentencia SQL.", true); return; }
+  if (esEscritura(sql) &&
+      !confirm("Esta sentencia puede MODIFICAR o BORRAR datos en producción.\n\n¿Ejecutarla de todos modos?")) {
+    return;
+  }
+
+  $("#error-box").addClass("oculto").text("");
+  $("#resultado").addClass("oculto");
+  $("#resumen").text("");
+
+  const { status, ok, cuerpo } = await llamar(API_CONSULTAS, {
+    method: "POST", body: JSON.stringify({ sql }),
+  });
+
+  if (!ok) {
+    if (sesionInvalida(status)) return;
+    $("#error-box").text((cuerpo && cuerpo.detail) || `Error (HTTP ${status}).`).removeClass("oculto");
+    return;
+  }
+
+  if (cuerpo.tipo === "consulta") {
+    renderTabla(cuerpo);
+  } else {
+    // Comando: rowcount + mensaje de PostgreSQL + caché reiniciada.
+    let txt = `✔ ${cuerpo.mensaje || "comando ejecutado"} · ${cuerpo.rowcount} fila(s) afectada(s).`;
+    if (typeof cuerpo.cache_reiniciada === "number") {
+      txt += ` Caché reiniciada (${cuerpo.cache_reiniciada} clave/s).`;
+    }
+    $("#resumen").text(txt);
+    avisar("Comando ejecutado.");
+  }
+}
+
+function renderTabla(r) {
+  const cols = r.columnas || [];
+  $("#res-cabecera").html(cols.map(c => `<th>${escapar(c)}</th>`).join(""));
+  const $cuerpo = $("#res-cuerpo");
+  if (!r.filas.length) {
+    $cuerpo.html(`<tr><td class="sin-datos" colspan="${cols.length || 1}">Sin filas.</td></tr>`);
+  } else {
+    $cuerpo.html(r.filas.map(fila => "<tr>" + fila.map(celda => {
+      const v = (celda !== null && typeof celda === "object") ? JSON.stringify(celda) : celda;
+      return `<td>${celda === null ? '<span class="sub">NULL</span>' : escapar(String(v))}</td>`;
+    }).join("") + "</tr>").join(""));
+  }
+  $("#resultado").removeClass("oculto");
+  $("#resumen").text(`${r.num_filas} fila(s)` + (r.truncado ? ` (mostrando las primeras ${r.num_filas}; hay más)` : ""));
+}
+
+// Ctrl+Enter ejecuta.
+$("#sql").on("keydown", function (e) {
+  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); ejecutar(); }
+});
+</script>
+{% endblock %}
