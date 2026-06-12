@@ -175,9 +175,12 @@ async def validar_registro_senescyt(
         ),
     ),
 ):
-    """Valida que el documento sea un registro de título de la SENESCYT y, si se
-    envían `numero_identificacion` y/o `nombres`, contrasta la identidad con la
-    extraída, devolviendo la información del extractor personalizado."""
+    """Valida un documento académico de admisión: lo clasifica como registro de
+    título de la SENESCYT, carta de compromiso de subida de título o apostilla, y
+    extrae sus datos con el extractor de la clase detectada. Si se envían
+    `numero_identificacion` y/o `nombres`, contrasta la identidad contra la
+    extraída (las tres clases comparan igual). La URL conserva el nombre
+    'validar-registro-senescyt' por compatibilidad con los consumidores."""
     contenido = await leer_archivo(file)
 
     try:
@@ -194,9 +197,8 @@ async def validar_registro_senescyt(
     identidad_solicitada = bool((numero_identificacion or "").strip() or (nombres or "").strip())
     etiqueta = ETIQUETAS_SENESCYT.get(resultado["clase_detectada"], "el documento")
 
-    if not resultado["es_senescyt"]:
-        mensaje = ("El documento no fue reconocido como un registro de título de la "
-                   "SENESCYT, una carta de compromiso de subida de título ni una apostilla.")
+    if not resultado["existe_clase"]:
+        mensaje = "El documento no coincide con ninguno de los formatos esperados."
     elif not resultado["datos"]:
         mensaje = (f"El documento corresponde a {etiqueta}, pero no se pudo extraer la "
                    "información; falló el extractor o el documento no tiene suficiente "
@@ -220,7 +222,7 @@ async def validar_registro_senescyt(
         mensaje = f"Documento reconocido como {etiqueta}; información extraída."
 
     return RespuestaRegistroSenescyt(
-        result=resultado["es_senescyt"],
+        result=resultado["existe_clase"],
         message=mensaje,
         status=resultado["status"],
         match_document=resultado["match_document"],

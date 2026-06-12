@@ -36,7 +36,7 @@ TIPOS_IDENTIDAD = {CLASE_CEDULA, CLASE_PASAPORTE}
 TIPOS_SENESCYT = {CLASE_SENESCYT, CLASE_CARTA_COMPROMISO, CLASE_APOSTILLA}
 TIPOS_PAGO = {CLASE_DEPOSITO, CLASE_TRANSFERENCIA}
 FORMATOS_ACEPTADOS = {"application/pdf", "image/jpeg", "image/png"}
-MAX_BYTES = 10 * 1024 * 1024
+MAX_BYTES = 15 * 1024 * 1024
 PATRON_CEDULA = re.compile(r"\b\d{10}\b")
 _PATRON_NO_DIGITO = re.compile(r"\D")
 _PATRON_NO_ALFANUM = re.compile(r"[^A-Z0-9]")
@@ -484,12 +484,13 @@ class ServicioDocumentos:
         nombre: str = "",
     ) -> dict:
         """
-        Valida que el documento sea un registro de título de la SENESCYT y, si se
-        envían, contrasta la identidad con la extraída. Como en validar-identidad,
-        `es_senescyt` (el `result`) refleja solo la clasificación: que el documento
-        sea reconocido como REGISTRO_SENESCYT con confianza suficiente, sin exigir
-        que la extracción traiga datos. Aparte, compara los datos del sistema con
-        los del documento:
+        Valida que el documento sea una de las clases aceptadas por la ruta
+        (registro SENESCYT, carta de compromiso de subida de título o apostilla) y,
+        si se envían, contrasta la identidad con la extraída. Como en
+        validar-identidad, `existe_clase` (el `result`) refleja solo la
+        clasificación: que el documento sea reconocido como una de esas clases con
+        confianza suficiente, sin exigir que la extracción traiga datos. Aparte,
+        compara los datos del sistema con los del documento:
 
           - identificación: se compara ignorando espacios y caracteres especiales.
           - nombres: se comparan en minúsculas, sin tildes y con los tokens
@@ -513,10 +514,10 @@ class ServicioDocumentos:
         # El clasificador lo reconoce como una de las clases aceptadas por la ruta
         # (registro SENESCYT, carta de compromiso de subida de título o apostilla).
         # Las tres comparan identidad igual; el extractor se elige por clase.
-        es_senescyt = clase in TIPOS_SENESCYT and confianza >= umbral
+        existe_clase = clase in TIPOS_SENESCYT and confianza >= umbral
 
         datos = {}
-        if es_senescyt:
+        if existe_clase:
             datos = await self._extraer_datos(RUTA_SENESCYT, clase, file_id)
 
         # Contraste de identidad: solo se evalúan los campos enviados (los None se
@@ -532,8 +533,8 @@ class ServicioDocumentos:
         return {
             "clase_detectada": clase,
             "confianza": confianza,
-            "es_senescyt": es_senescyt,
-            "status": estado_validacion(es_senescyt, datos),
+            "existe_clase": existe_clase,
+            "status": estado_validacion(existe_clase, datos),
             "match_document": match_document,
             "coincide_identificacion": coincide_identificacion,
             "coincide_nombres": coincide_nombres,

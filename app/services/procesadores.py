@@ -471,7 +471,7 @@ _CLASIF_SENESCYT = {"classifications": [
      "description": ("Registro de título de la SENESCYT (Ecuador): documento que "
                      "certifica el registro de un título académico, con número de "
                      "registro, titular, institución de educación superior y título.")},
-    {"id": "carta_compromiso_subida_titulo", "type": "CARTA_COMPROMISO_SUBIDA_TITULO",
+    {"id": "carta_compromiso", "type": "CARTA_COMPROMISO",
      "description": ("Carta de compromiso de subida de título: documento en el que el "
                      "aspirante se compromete a entregar o registrar su título académico "
                      "ante la institución, con nombres del firmante y, normalmente, su "
@@ -536,7 +536,7 @@ SEMILLA = [
     ("validar-identidad", "extraer", "PASAPORTE", "inline", None, None, _ESQUEMA_PASAPORTE, None),
     ("validar-registro-senescyt", "clasificar", "", "inline", None, None, _CLASIF_SENESCYT, UMBRAL_DEFECTO),
     ("validar-registro-senescyt", "extraer", "REGISTRO_SENESCYT", "inline", None, None, _ESQUEMA_SENESCYT, None),
-    ("validar-registro-senescyt", "extraer", "CARTA_COMPROMISO_SUBIDA_TITULO", "inline", None, None, _ESQUEMA_CARTA_COMPROMISO, None),
+    ("validar-registro-senescyt", "extraer", "CARTA_COMPROMISO", "inline", None, None, _ESQUEMA_CARTA_COMPROMISO, None),
     ("validar-registro-senescyt", "extraer", "APOSTILLA", "inline", None, None, _ESQUEMA_APOSTILLA, None),
     ("validar-pago", "clasificar", "", "inline", None, None, _CLASIF_PAGO, UMBRAL_DEFECTO),
     ("validar-pago", "extraer", "DEPOSITO", "inline", None, None, _ESQUEMA_DEPOSITO, None),

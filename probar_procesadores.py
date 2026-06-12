@@ -851,7 +851,7 @@ procs_sen = [p for p in cliente.get("/api/v1/procesadores/", headers=A).json()
 check("tiene su clasificador y un extractor por clase (3 clases + clasificar)",
       {(p["operacion"], p["clase"]) for p in procs_sen}
       == {("clasificar", ""), ("extraer", "REGISTRO_SENESCYT"),
-          ("extraer", "CARTA_COMPROMISO_SUBIDA_TITULO"), ("extraer", "APOSTILLA")})
+          ("extraer", "CARTA_COMPROMISO"), ("extraer", "APOSTILLA")})
 
 MOCK_CLASIFICACION.update({"type": "REGISTRO_SENESCYT", "confidence": 0.96})
 MOCK_EXTRACCION.clear()
@@ -954,8 +954,8 @@ def _validar_sen(data):
     return cliente.post("/api/v1/validaciones/validar-registro-senescyt/",
                         files=ARCHIVO, data=data, headers=H)
 
-# CARTA_COMPROMISO_SUBIDA_TITULO: reconocida, extrae y compara identidad.
-MOCK_CLASIFICACION.update({"type": "CARTA_COMPROMISO_SUBIDA_TITULO", "confidence": 0.95})
+# CARTA_COMPROMISO: reconocida, extrae y compara identidad.
+MOCK_CLASIFICACION.update({"type": "CARTA_COMPROMISO", "confidence": 0.95})
 MOCK_EXTRACCION.clear()
 MOCK_EXTRACCION.update({"numero_identificacion": "0942112129",
                         "nombres_completos": "MOLINA JARAMILLO CARLOS ANDRES",
@@ -964,7 +964,7 @@ reiniciar_capturas()
 d = _validar_sen(SEN_OK).json()
 check("carta de compromiso -> result True, clase y status extraido",
       d.get("result") is True and d.get("status") == "extraido"
-      and d.get("document_class") == "CARTA_COMPROMISO_SUBIDA_TITULO", str(d)[:250])
+      and d.get("document_class") == "CARTA_COMPROMISO", str(d)[:250])
 check("carta de compromiso -> compara identidad (match_document True)",
       d.get("match_document") is True, str(d)[:250])
 props = CAPTURAS["/extract"][-1].get("config", {}).get("schema", {}).get("properties", {})
