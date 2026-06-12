@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 
 class ProcesadorCrear(BaseModel):
     """Datos de entrada para crear una fila de procesador que configura una ruta/operación de Extend."""
-    ruta: str = Field(..., description="'clasificar' | 'validar-identidad' | 'ocr'")
+    ruta: str = Field(..., description="'validar-identidad' | 'validar-registro-senescyt' | 'ocr'")
     operacion: str = Field(..., description="'clasificar' | 'extraer' | 'parse'")
     clase: str = Field("", max_length=50)
     modo: str = Field(..., description="'id' | 'inline'")

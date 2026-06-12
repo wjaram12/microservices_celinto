@@ -3,10 +3,11 @@ Servicio ServicioRutas: el catálogo de rutas (URLs) de la API, en PostgreSQL.
 
 Cada fila describe una ruta de inferencia del servicio:
 
-    clave        identificador lógico ('clasificar', 'validar-identidad', 'ocr').
-                 Es lo que referencia la tabla `procesadores` (columna ruta):
-                 el CRUD de procesadores une una ruta con sus procesadores.
-    url          el endpoint real ('/api/v1/clasificar/', ...). Informativo.
+    clave        identificador lógico ('validar-identidad', 'ocr',
+                 'validar-registro-senescyt'). Es lo que referencia la tabla
+                 `procesadores` (columna ruta): el CRUD de procesadores une una
+                 ruta con sus procesadores.
+    url          el endpoint real ('/api/v1/ocr/', ...). Informativo.
     descripcion  qué hace la ruta.
     activo       TRUE = se pueden asociar procesadores nuevos a esta ruta.
 
@@ -23,8 +24,6 @@ from psycopg2.extras import RealDictCursor
 from app.core.db import ServicioBD
 
 SEMILLA = [
-    ("clasificar", "/api/v1/clasificar/",
-     "Clasifica un documento y devuelve clase, confianza y validez."),
     ("validar-identidad", "/api/v1/validaciones/validar-identidad/",
      "Valida un documento de identidad: clasifica, extrae campos y compara la cédula."),
     ("ocr", "/api/v1/ocr/",

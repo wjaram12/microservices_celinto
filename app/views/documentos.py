@@ -1,5 +1,5 @@
 """
-View de inferencia: clasificación, OCR y validación de identidad.
+View de inferencia: OCR y validaciones (identidad y registro SENESCYT).
 
 Solo capa HTTP: lee la petición, llama al servicio ServicioDocumentos y traduce
 el resultado (o los errores) a códigos HTTP. Sin lógica de negocio.
@@ -9,7 +9,6 @@ from typing import Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
-from app.schemas.clasificador import RespuestaClasificacion
 from app.schemas.ocr import RespuestaOCR
 from app.schemas.senescyt import RespuestaRegistroSenescyt
 from app.schemas.validador import RespuestaValidacion
@@ -41,36 +40,6 @@ async def leer_archivo(file: UploadFile) -> bytes:
     except Exception:
         logger.exception("No se pudo leer el archivo subido")
         raise HTTPException(status_code=400, detail="No se pudo leer el archivo subido.")
-
-
-@api.post("/clasificar/", response_model=RespuestaClasificacion, tags=["Clasificadores"])
-async def clasificar_documento(file: UploadFile = File(...)):
-    """Recibe un archivo y devuelve su clasificación (clase, confianza, validez)."""
-    contenido = await leer_archivo(file)
-
-    try:
-        resultado = await documentos.clasificar(contenido, file.content_type, file.filename or "")
-    except ErrorDeArchivo as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except ErrorDeProveedor as e:
-        raise HTTPException(status_code=502, detail=str(e))
-    except Exception:
-        logger.exception("Error procesando el documento en /clasificar/")
-        raise HTTPException(status_code=500, detail="Error interno al procesar el documento.")
-
-    if resultado["es_valido"]:
-        mensaje = "Documento procesado y clasificado con éxito."
-    elif resultado["clase_detectada"] in srv.CLASES_RECHAZADAS:
-        mensaje = "El documento no corresponde a ninguno de los tipos aceptados."
-    else:
-        mensaje = "La confianza del modelo es insuficiente para dar por válido este documento."
-
-    return RespuestaClasificacion(
-        result=resultado["es_valido"],
-        message=mensaje,
-        document_class=resultado["clase_detectada"],
-        confidence=resultado["confianza"],
-    )
 
 
 @api.post("/ocr/", response_model=RespuestaOCR, tags=["OCR"])
@@ -150,6 +119,9 @@ async def validar_documento(
     clase = resultado["clase_detectada"]
     if not resultado["es_identidad"]:
         mensaje = "El documento no fue reconocido como cédula ni pasaporte."
+    elif not resultado["datos"]:
+        mensaje = (f"El documento es {clase}, pero no se pudo extraer la información; "
+                   "falló el extractor o el documento no tiene suficiente claridad.")
     elif resultado["identificacion_sistema"] is None:
         mensaje = f"Documento reconocido como {clase}; datos extraídos."
     elif resultado["identificacion_documento"] is None:
@@ -162,6 +134,7 @@ async def validar_documento(
     return RespuestaValidacion(
         result=resultado["es_identidad"],
         message=mensaje,
+        status=resultado["status"],
         match_document=resultado["coincide"],
         document_class=resultado["clase_detectada"],
         confidence=resultado["confianza"],
@@ -177,8 +150,10 @@ async def validar_registro_senescyt(
         None,
         description=(
             "Opcional. Número de identificación (cédula o pasaporte) del titular "
-            "según el sistema. Si se envía, se compara con el extraído del documento "
-            "ignorando espacios y caracteres especiales."
+            "según el sistema. Si se envía, se valida primero (cédula: 10 dígitos y "
+            "dígito verificador; pasaporte: alfanumérico, mínimo 5 — 400 si no) y se "
+            "compara con el extraído del documento ignorando espacios y caracteres "
+            "especiales."
         ),
     ),
     nombres: Optional[str] = Form(
@@ -206,17 +181,17 @@ async def validar_registro_senescyt(
         logger.exception("Error procesando el documento en /validaciones/validar-registro-senescyt/")
         raise HTTPException(status_code=500, detail="Error interno al procesar el documento.")
 
+    identidad_solicitada = bool((numero_identificacion or "").strip() or (nombres or "").strip())
+
     if not resultado["es_senescyt"]:
         mensaje = "El documento no fue reconocido como un registro de título de la SENESCYT."
     elif not resultado["datos"]:
         mensaje = ("El documento es un registro SENESCYT, pero no se pudo extraer la "
                    "información; falló el extractor o el documento no tiene suficiente "
                    "claridad.")
-    elif resultado["match_document"] is None:
-        mensaje = "Registro SENESCYT reconocido; información extraída."
     elif resultado["match_document"]:
         mensaje = "Registro SENESCYT reconocido; la identidad coincide con la del documento."
-    else:
+    elif resultado["match_document"] is False:
         difieren = []
         if resultado["coincide_identificacion"] is False:
             difieren.append("el número de identificación")
@@ -224,10 +199,18 @@ async def validar_registro_senescyt(
             difieren.append("los nombres")
         mensaje = ("Es un registro SENESCYT, pero " + " y ".join(difieren) +
                    " no coincide(n) con los datos proporcionados.")
+    elif identidad_solicitada:
+        # match_document None pese a haberse enviado datos: el documento no traía
+        # los campos para contrastar la identidad.
+        mensaje = ("Registro SENESCYT reconocido, pero no se pudo leer del documento "
+                   "la información para verificar la identidad.")
+    else:
+        mensaje = "Registro SENESCYT reconocido; información extraída."
 
     return RespuestaRegistroSenescyt(
         result=resultado["es_senescyt"],
         message=mensaje,
+        status=resultado["status"],
         match_document=resultado["match_document"],
         document_class=resultado["clase_detectada"],
         confidence=resultado["confianza"],

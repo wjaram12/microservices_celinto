@@ -11,6 +11,7 @@ clasificar, extraer campos y/o parsear (OCR) — usando:
 Orden de lectura: constantes -> preprocesamiento -> búsqueda de texto ->
 helpers de cédula -> la clase con las operaciones de alto nivel.
 """
+import asyncio
 import re
 import unicodedata
 from typing import Optional, Tuple
@@ -29,15 +30,45 @@ TIPOS_IDENTIDAD = {CLASE_CEDULA, CLASE_PASAPORTE}
 FORMATOS_ACEPTADOS = {"application/pdf", "image/jpeg", "image/png"}
 MAX_BYTES = 10 * 1024 * 1024
 PATRON_CEDULA = re.compile(r"\b\d{10}\b")
+_PATRON_NO_DIGITO = re.compile(r"\D")
+_PATRON_NO_ALFANUM = re.compile(r"[^A-Z0-9]")
+_PATRON_TOKEN_NOMBRE = re.compile(r"[a-z0-9]+")
 
-RUTA_CLASIFICAR = "clasificar"
 RUTA_VALIDAR = "validar-identidad"
 RUTA_OCR = "ocr"
 RUTA_SENESCYT = "validar-registro-senescyt"
 
-CLASES_RECHAZADAS = {"OTROS", "OTHER", "DESCONOCIDO", "DOCUMENTO_DESCONOCIDO"}
-
 TIPOS_DESCARTE = {"other", "otros"}
+
+# Estado estructurado de las rutas de validación (campo `status`): da a los
+# consumidores una señal legible por máquina, sin tener que parsear `message`
+# ni inferir de si `datos` viene vacío.
+ESTADO_NO_RECONOCIDO = "no_reconocido"       # la clase no es la esperada por la ruta
+ESTADO_EXTRACCION_FALLIDA = "extraccion_fallida"  # clase correcta pero sin datos
+ESTADO_EXTRAIDO = "extraido"                 # clase correcta y datos extraídos
+
+
+def estado_validacion(es_clase_esperada: bool, datos: dict) -> str:
+    """Estado estructurado común a validar-identidad y validar-registro-senescyt."""
+    if not es_clase_esperada:
+        return ESTADO_NO_RECONOCIDO
+    if not datos:
+        return ESTADO_EXTRACCION_FALLIDA
+    return ESTADO_EXTRAIDO
+
+
+# Tope de lecturas de configuración concurrentes fuera del event loop. Si Redis
+# cae, cada lectura degrada a PostgreSQL y el pool (ThreadedConnectionPool de 10)
+# lanza PoolError al agotarse en vez de esperar; con el tope por debajo de las
+# conexiones del pool, las peticiones hacen cola aquí en lugar de fallar con 500.
+_LECTURAS_CONFIG = asyncio.Semaphore(8)
+
+
+async def _config_en_hilo(func, *args):
+    """Ejecuta un resolutor de configuración (I/O síncrono de Redis/PG) en un
+    hilo para no bloquear el event loop, acotado por _LECTURAS_CONFIG."""
+    async with _LECTURAS_CONFIG:
+        return await asyncio.to_thread(func, *args)
 
 
 def validar_formato(contenido: bytes, mime_type: str) -> None:
@@ -118,7 +149,7 @@ def normalizar_cedula(valor) -> str:
         return ""
     if isinstance(valor, float) and valor.is_integer():
         valor = int(valor)
-    return re.sub(r"\D", "", str(valor))
+    return _PATRON_NO_DIGITO.sub("", str(valor))
 
 
 def normalizar_identificacion(valor) -> str:
@@ -130,7 +161,24 @@ def normalizar_identificacion(valor) -> str:
         return ""
     if isinstance(valor, float) and valor.is_integer():
         valor = int(valor)
-    return re.sub(r"[^A-Z0-9]", "", str(valor).upper())
+    return _PATRON_NO_ALFANUM.sub("", str(valor).upper())
+
+
+def normalizar_identificacion_comparable(valor) -> str:
+    """
+    Como `normalizar_identificacion`, pero rellena con ceros a la izquierda las
+    identificaciones puramente numéricas más cortas que una cédula (10 dígitos),
+    SOLO si el resultado es una cédula ecuatoriana válida. Recupera el cero
+    inicial que algunos extractores pierden al devolver la cédula como número
+    (p. ej. 942112129 -> 0942112129) sin tocar otros números cortos (pasaportes
+    numéricos extranjeros) ni los alfanuméricos.
+    """
+    norm = normalizar_identificacion(valor)
+    if norm.isdigit() and len(norm) < LONGITUD_CEDULA:
+        rellena = norm.zfill(LONGITUD_CEDULA)
+        if cedula_es_valida(rellena):
+            return rellena
+    return norm
 
 
 _CLAVES_NUMERO = (
@@ -155,20 +203,23 @@ def normalizar_nombre(valor) -> str:
     'MOLINA JARAMILLO CARLOS ANDRES' y 'Carlos Andrés Molina Jaramillo'
     resultan iguales.
     """
-    tokens = re.findall(r"[a-z0-9]+", _normalizar_busqueda(str(valor or "")))
+    tokens = _PATRON_TOKEN_NOMBRE.findall(_normalizar_busqueda(str(valor or "")))
     return " ".join(sorted(tokens))
 
 
 def comparar_campo(valor_sistema, valor_documento, normalizador) -> Optional[bool]:
     """
     Compara un dato del sistema con el extraído del documento, ya normalizados.
-    Devuelve None si el dato del sistema viene vacío (no se valida ese campo);
-    en caso contrario True/False según coincidan.
+    Devuelve None cuando no se puede comparar —el sistema no lo envió o el
+    documento no lo trae—; en caso contrario True/False según coincidan. Así se
+    distingue "no coincide" (ambos presentes y distintos) de "no se pudo leer".
     """
     if valor_sistema is None or not str(valor_sistema).strip():
         return None
     documento = normalizador(valor_documento)
-    return bool(documento) and normalizador(valor_sistema) == documento
+    if not documento:
+        return None
+    return normalizador(valor_sistema) == documento
 
 
 def valor_en_datos(datos: dict, claves: tuple):
@@ -225,6 +276,34 @@ def cedula_es_valida(numero: str) -> bool:
     return int(numero[9]) == verificador_esperado
 
 
+def validar_identificacion_sistema(valor: str) -> str:
+    """
+    Valida y normaliza (fail-fast) la identificación que envía el sistema:
+    cédula (10 dígitos + dígito verificador) o pasaporte (alfanumérico, mínimo
+    5 caracteres). Lanza ErrorDeValidacion con el motivo. La usan AMBAS rutas
+    de validación para que el contrato de entrada sea el mismo.
+    """
+    id_sistema = normalizar_identificacion(valor)
+    if id_sistema.isdigit():
+        if len(id_sistema) != LONGITUD_CEDULA:
+            raise ErrorDeValidacion(
+                f"La cédula del sistema debe tener {LONGITUD_CEDULA} dígitos; "
+                f"se recibió '{valor}' ({len(id_sistema)} dígitos). "
+                "¿Se perdió un cero a la izquierda?"
+            )
+        if not cedula_es_valida(id_sistema):
+            raise ErrorDeValidacion(
+                f"La cédula del sistema '{valor}' no es un número de "
+                "cédula ecuatoriana válido (falla el dígito verificador)."
+            )
+    elif len(id_sistema) < 5:
+        raise ErrorDeValidacion(
+            f"La identificación del sistema '{valor}' es demasiado "
+            "corta para ser una cédula o un número de pasaporte."
+        )
+    return id_sistema
+
+
 class ServicioDocumentos:
     """Flujos completos de clasificación, OCR y validación de identidad."""
 
@@ -257,10 +336,17 @@ class ServicioDocumentos:
             clasificaciones.append(OTRO_POR_DEFECTO)
         return clasificaciones
 
-    async def _clasificar_archivo(self, file_id: str, ruta: str) -> Tuple[str, float]:
-        """Clasifica un archivo ya subido con el procesador configurado para la ruta."""
-        fragmento = procesadores.cuerpo_clasificacion(ruta, self.construir_clasificaciones)
-        return await extend.clasificar(file_id, fragmento)
+    async def _clasificar_archivo(self, file_id: str, ruta: str) -> Tuple[str, float, float]:
+        """
+        Clasifica un archivo ya subido con el procesador configurado para la
+        ruta. Devuelve (clase, confianza, umbral). La config (fragmento + umbral)
+        se lee una sola vez y fuera del event loop (la lectura de Redis/PG es
+        I/O síncrono que de otro modo bloquearía a las demás corrutinas).
+        """
+        fragmento, umbral = await _config_en_hilo(
+            procesadores.config_clasificacion, ruta, self.construir_clasificaciones)
+        clase, confianza = await extend.clasificar(file_id, fragmento)
+        return clase, confianza, umbral
 
     async def _extraer_datos(self, ruta: str, clase: str, file_id: str) -> dict:
         """
@@ -268,27 +354,15 @@ class ServicioDocumentos:
         procesador ni esquema (no es un documento de identidad reconocido en
         esa ruta).
         """
-        fragmento = procesadores.cuerpo_extraccion(ruta, clase)
+        fragmento = await _config_en_hilo(procesadores.cuerpo_extraccion, ruta, clase)
         if fragmento is None:
             return {}
         return await extend.extraer(file_id, fragmento)
 
     async def _extraer_texto(self, file_id: str, ruta: str) -> str:
         """OCR con la configuración de parse de la ruta."""
-        return await extend.parsear(file_id, procesadores.cuerpo_parse(ruta))
-
-    async def clasificar(self, contenido: bytes, mime_type: str, nombre: str = "") -> dict:
-        """Preprocesa, clasifica y decide si es válido según el umbral de confianza."""
-        preprocesar(contenido, mime_type)
-        file_id = await extend.subir_archivo(contenido, mime_type, nombre)
-        clase, confianza = await self._clasificar_archivo(file_id, RUTA_CLASIFICAR)
-        umbral = procesadores.umbral_clasificacion(RUTA_CLASIFICAR)
-        es_valido = clase not in CLASES_RECHAZADAS and confianza >= umbral
-        return {
-            "clase_detectada": clase,
-            "confianza": confianza,
-            "es_valido": es_valido,
-        }
+        fragmento = await _config_en_hilo(procesadores.cuerpo_parse, ruta)
+        return await extend.parsear(file_id, fragmento)
 
     async def ocr(
         self,
@@ -319,8 +393,11 @@ class ServicioDocumentos:
         """
         Clasifica el documento, extrae sus campos (cédula o pasaporte) y, si se
         envía `cedula_sistema`, compara el número contra el extraído SEGÚN LA
-        CLASE detectada: cédula (solo dígitos + verificador) o pasaporte
-        (alfanumérico en mayúsculas).
+        CLASE detectada: cédula (solo dígitos + verificador, recuperando un cero
+        inicial perdido) o pasaporte (alfanumérico en mayúsculas). `coincide` es
+        True/False solo cuando ambos lados están presentes y None cuando no hay
+        nada que comparar (no se envió la cédula, el documento no trae el número
+        o no es un documento de identidad), igual que validar-registro-senescyt.
 
         Esta ruta usa SOLO dos procesadores: el clasificador y el extractor.
         No usa OCR/parse: el número del documento sale de la extracción
@@ -333,30 +410,11 @@ class ServicioDocumentos:
         """
         id_sistema = None
         if cedula_sistema and cedula_sistema.strip():
-            id_sistema = normalizar_identificacion(cedula_sistema)
-            if id_sistema.isdigit():
-                if len(id_sistema) != LONGITUD_CEDULA:
-                    raise ErrorDeValidacion(
-                        f"La cédula del sistema debe tener {LONGITUD_CEDULA} dígitos; "
-                        f"se recibió '{cedula_sistema}' ({len(id_sistema)} dígitos). "
-                        "¿Se perdió un cero a la izquierda?"
-                    )
-                if not cedula_es_valida(id_sistema):
-                    raise ErrorDeValidacion(
-                        f"La cédula del sistema '{cedula_sistema}' no es un número de "
-                        "cédula ecuatoriana válido (falla el dígito verificador)."
-                    )
-            elif len(id_sistema) < 5:
-                raise ErrorDeValidacion(
-                    f"La identificación del sistema '{cedula_sistema}' es demasiado "
-                    "corta para ser una cédula o un número de pasaporte."
-                )
+            id_sistema = validar_identificacion_sistema(cedula_sistema)
 
         preprocesar(contenido, mime_type)
         file_id = await extend.subir_archivo(contenido, mime_type, nombre)
-        clase, confianza = await self._clasificar_archivo(file_id, RUTA_VALIDAR)
-
-        umbral = procesadores.umbral_clasificacion(RUTA_VALIDAR)
+        clase, confianza, umbral = await self._clasificar_archivo(file_id, RUTA_VALIDAR)
         es_cedula = clase == CLASE_CEDULA and confianza >= umbral
         es_identidad = clase in TIPOS_IDENTIDAD and confianza >= umbral
 
@@ -369,6 +427,7 @@ class ServicioDocumentos:
             "confianza": confianza,
             "es_cedula": es_cedula,
             "es_identidad": es_identidad,
+            "status": estado_validacion(es_identidad, datos),
             "datos": datos,
             "identificacion_sistema": None,
             "identificacion_documento": None,
@@ -381,16 +440,23 @@ class ServicioDocumentos:
 
             if es_identidad:
                 if clase == CLASE_CEDULA:
+                    # Solo dígitos (tolera prefijos como 'Nº'), recuperando el
+                    # cero inicial que el extractor pierde al devolver la cédula
+                    # como número (942112129 -> 0942112129).
                     id_documento = numero_en_datos(datos)
+                    if id_documento and len(id_documento) < LONGITUD_CEDULA:
+                        id_documento = id_documento.zfill(LONGITUD_CEDULA)
                     id_documento = id_documento if cedula_es_valida(id_documento) else None
                 else:
                     id_documento = normalizar_identificacion(
                         valor_en_datos(datos, _CLAVES_PASAPORTE)
                     ) or None
                 resultado["identificacion_documento"] = id_documento
-                resultado["coincide"] = bool(id_documento) and id_sistema == id_documento
-            else:
-                resultado["coincide"] = False
+                # None cuando el documento no trae el número (no se pudo leer);
+                # True/False solo cuando ambos lados están presentes. Coherente con
+                # validar-registro-senescyt.
+                resultado["coincide"] = (id_sistema == id_documento) if id_documento else None
+            # Si no es identidad, `coincide` queda None: no hay nada que comparar.
 
         # El número de pasaporte se devuelve con el prefijo 'VS-'. Se hace al
         # final, después de la comparación, para que `coincide` siga usando el
@@ -425,10 +491,15 @@ class ServicioDocumentos:
         ninguno, y None si no se envió ninguno. Usa clasificador + extractor (sin
         OCR); el extractor se configura por ruta en la tabla `procesadores`.
         """
+        # Mismo contrato de entrada que validar-identidad: si se envía una
+        # identificación, debe ser una cédula o pasaporte plausible (fail-fast,
+        # ANTES de gastar la llamada a Extend).
+        if numero_identificacion and numero_identificacion.strip():
+            validar_identificacion_sistema(numero_identificacion)
+
         preprocesar(contenido, mime_type)
         file_id = await extend.subir_archivo(contenido, mime_type, nombre)
-        clase, confianza = await self._clasificar_archivo(file_id, RUTA_SENESCYT)
-        umbral = procesadores.umbral_clasificacion(RUTA_SENESCYT)
+        clase, confianza, umbral = await self._clasificar_archivo(file_id, RUTA_SENESCYT)
 
         # El clasificador lo reconoce como registro SENESCYT.
         es_senescyt = clase == CLASE_SENESCYT and confianza >= umbral
@@ -440,7 +511,8 @@ class ServicioDocumentos:
         # Contraste de identidad: solo se evalúan los campos enviados (los None se
         # omiten). match_document es True si al menos uno de los enviados coincide.
         coincide_identificacion = comparar_campo(
-            numero_identificacion, valor_en_datos(datos, _CLAVES_NUMERO), normalizar_identificacion)
+            numero_identificacion, valor_en_datos(datos, _CLAVES_NUMERO),
+            normalizar_identificacion_comparable)
         coincide_nombres = comparar_campo(
             nombres, valor_en_datos(datos, _CLAVES_NOMBRE), normalizar_nombre)
         comparaciones = [c for c in (coincide_identificacion, coincide_nombres) if c is not None]
@@ -450,6 +522,7 @@ class ServicioDocumentos:
             "clase_detectada": clase,
             "confianza": confianza,
             "es_senescyt": es_senescyt,
+            "status": estado_validacion(es_senescyt, datos),
             "match_document": match_document,
             "coincide_identificacion": coincide_identificacion,
             "coincide_nombres": coincide_nombres,

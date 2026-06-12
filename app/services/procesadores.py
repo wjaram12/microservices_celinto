@@ -7,9 +7,9 @@ clase de documento. Así cada ruta puede usar procesadores distintos. Se edita e
 caliente desde /admin/procesadores, sin redeploy.
 
     ruta          ruta de la API que usa la fila:
-                  'clasificar'        -> POST /api/v1/clasificar/
-                  'validar-identidad' -> POST /api/v1/validaciones/validar-identidad/
-                  'ocr'               -> POST /api/v1/ocr/
+                  'validar-identidad'         -> POST /api/v1/validaciones/validar-identidad/
+                  'validar-registro-senescyt' -> POST /api/v1/validaciones/validar-registro-senescyt/
+                  'ocr'                       -> POST /api/v1/ocr/
     operacion     'clasificar' | 'extraer' | 'parse'
     clase         clase de documento ('CEDULA', 'PASAPORTE', ...) para los
                   esquemas de extracción; '' cuando no aplica.
@@ -28,7 +28,7 @@ El .env sigue guardando SOLO secretos (EXTEND_API_KEY, DATABASE_URL).
 Los resolutores (cuerpo_*) leen de esta tabla en cada petición y devuelven el
 fragmento de body que ServicioDocumentos inyecta en la llamada a Extend.
 """
-from typing import Callable, Optional
+from typing import Callable, Optional, Tuple
 
 from psycopg2 import errors as pg_errors
 from psycopg2.extras import Json, RealDictCursor
@@ -137,7 +137,6 @@ _CLASIF_SENESCYT = {"classifications": [
 ]}
 
 SEMILLA = [
-    ("clasificar", "clasificar", "", "inline", None, None, None, UMBRAL_DEFECTO),
     ("validar-identidad", "clasificar", "", "inline", None, None, None, UMBRAL_DEFECTO),
     ("validar-identidad", "extraer", "CEDULA", "inline", None, None, _ESQUEMA_CEDULA, None),
     ("validar-identidad", "extraer", "PASAPORTE", "inline", None, None, _ESQUEMA_PASAPORTE, None),
@@ -388,6 +387,25 @@ class ServicioProcesadores(ServicioBD):
             ref["version"] = fila["version"]
         return ref
 
+    def _fragmento_clasificacion(self, fila: Optional[dict],
+                                 construir_inline: Callable[[], list]) -> dict:
+        """Fragmento de /classify a partir de la fila activa de 'clasificar' (o
+        None). Ver `cuerpo_clasificacion` para el orden de prioridad."""
+        if fila and fila["modo"] == "id" and fila["procesador_id"]:
+            return {"classifier": self._ref_procesador(fila)}
+        esquema = (fila or {}).get("esquema")
+        propias = esquema.get("classifications") if isinstance(esquema, dict) else None
+        if propias:
+            return {"config": {"classifications": _normalizar_clasificaciones(propias)}}
+        return {"config": {"classifications": construir_inline()}}
+
+    @staticmethod
+    def _umbral_de(fila: Optional[dict]) -> float:
+        """Umbral de la fila de 'clasificar', o UMBRAL_DEFECTO si no lo fija."""
+        if fila and fila.get("umbral") is not None:
+            return float(fila["umbral"])
+        return UMBRAL_DEFECTO
+
     def cuerpo_clasificacion(self, ruta: str, construir_inline: Callable[[], list]) -> dict:
         """
         Fragmento de body para /classify en la ruta dada, en orden de prioridad:
@@ -399,14 +417,8 @@ class ServicioProcesadores(ServicioBD):
         3. sin esquema -> las clasificaciones globales de la tabla
            `clasificaciones` (callable, para no tocarla cuando no hace falta).
         """
-        fila = self._obtener_activa(ruta, "clasificar", "")
-        if fila and fila["modo"] == "id" and fila["procesador_id"]:
-            return {"classifier": self._ref_procesador(fila)}
-        esquema = (fila or {}).get("esquema")
-        propias = esquema.get("classifications") if isinstance(esquema, dict) else None
-        if propias:
-            return {"config": {"classifications": _normalizar_clasificaciones(propias)}}
-        return {"config": {"classifications": construir_inline()}}
+        return self._fragmento_clasificacion(self._obtener_activa(ruta, "clasificar", ""),
+                                              construir_inline)
 
     def umbral_clasificacion(self, ruta: str) -> float:
         """
@@ -414,10 +426,17 @@ class ServicioProcesadores(ServicioBD):
         ruta. La toma de la fila de 'clasificar'; si no tiene una configurada,
         usa UMBRAL_DEFECTO.
         """
+        return self._umbral_de(self._obtener_activa(ruta, "clasificar", ""))
+
+    def config_clasificacion(self, ruta: str,
+                             construir_inline: Callable[[], list]) -> Tuple[dict, float]:
+        """
+        Fragmento de body para /classify y umbral de la ruta, leyendo la fila
+        activa de 'clasificar' UNA sola vez. Evita la doble lectura de caché
+        (fragmento + umbral) que hacía el flujo de inferencia por petición.
+        """
         fila = self._obtener_activa(ruta, "clasificar", "")
-        if fila and fila.get("umbral") is not None:
-            return float(fila["umbral"])
-        return UMBRAL_DEFECTO
+        return self._fragmento_clasificacion(fila, construir_inline), self._umbral_de(fila)
 
     def cuerpo_extraccion(self, ruta: str, clase: str) -> Optional[dict]:
         """

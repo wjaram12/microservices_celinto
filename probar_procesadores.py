@@ -424,6 +424,8 @@ check("el campo ocr de la respuesta queda null (deprecado)", r.json().get("ocr")
 # y la cédula del sistema fue '1710034065' -> deben coincidir.
 check("compara el número NORMALIZADO (guiones/espacios fuera) -> coincide",
       r.json().get("match_document") is True, r.text[:300])
+check("identidad reconocida + datos -> status extraido",
+      r.json().get("status") == "extraido", r.text[:300])
 from app.services.documentos import normalizar_cedula, numero_en_datos  # noqa: E402
 check("normalizar_cedula tolera int", normalizar_cedula(1710034065) == "1710034065")
 check("normalizar_cedula tolera float", normalizar_cedula(1710034065.0) == "1710034065")
@@ -494,22 +496,21 @@ check("LICENCIA ya no existe -> 404",
 
 
 # ================== FASE 5: umbral de confianza configurable ==================
-print("\n=== Fase 5: umbral configurable por ruta (la ruta /clasificar; da 0.95) ===")
-RC = "clasificar"  # ruta del endpoint /clasificar
-check("umbral por defecto = 0.85", abs(procesadores.umbral_clasificacion(RC) - 0.85) < 1e-9)
-r = cliente.post("/api/v1/clasificar/", files=ARCHIVO, headers=H)
-check("con umbral 0.85, confianza 0.95 -> válido", r.json().get("result") is True, r.text[:200])
+print("\n=== Fase 5: umbral configurable por ruta (validar-identidad; el mock da 0.95) ===")
+check("umbral por defecto = 0.85", abs(procesadores.umbral_clasificacion(RV) - 0.85) < 1e-9)
+r = validar()
+check("con umbral 0.85, confianza 0.95 -> identidad reconocida", r.json().get("result") is True, r.text[:200])
 
-procesadores.actualizar(id_de(RC, "clasificar"), umbral=0.99, tocar_umbral=True)
-check("umbral ahora = 0.99", abs(procesadores.umbral_clasificacion(RC) - 0.99) < 1e-9)
-r = cliente.post("/api/v1/clasificar/", files=ARCHIVO, headers=H)
-check("con umbral 0.99, confianza 0.95 -> NO válido", r.json().get("result") is False, r.text[:200])
+procesadores.actualizar(id_de(RV, "clasificar"), umbral=0.99, tocar_umbral=True)
+check("umbral ahora = 0.99", abs(procesadores.umbral_clasificacion(RV) - 0.99) < 1e-9)
+r = validar()
+check("con umbral 0.99, confianza 0.95 -> NO reconocida", r.json().get("result") is False, r.text[:200])
 
 check("umbral fuera de rango (1.5) -> rechazado",
       cliente.post("/api/v1/procesadores/",
-                   json={"ruta": RC, "operacion": "clasificar", "clase": "x", "modo": "inline", "umbral": 1.5},
+                   json={"ruta": RV, "operacion": "clasificar", "clase": "x", "modo": "inline", "umbral": 1.5},
                    headers=A).status_code in (400, 422))
-procesadores.actualizar(id_de(RC, "clasificar"), umbral=0.85, tocar_umbral=True)  # restaurar
+procesadores.actualizar(id_de(RV, "clasificar"), umbral=0.85, tocar_umbral=True)  # restaurar
 
 
 # ================== FASE 6: sincronización con Extend + versión ==================
@@ -584,7 +585,7 @@ print("\n=== Fase 8: CRUD de rutas y unión rutas <-> procesadores ===")
 r = cliente.get("/api/v1/rutas/", headers=A)
 check("listar rutas -> 200 con las rutas sembradas",
       r.status_code == 200 and
-      {"clasificar", "validar-identidad", "ocr", "validar-registro-senescyt"} <= {x["clave"] for x in r.json()})
+      {"validar-identidad", "ocr", "validar-registro-senescyt"} <= {x["clave"] for x in r.json()})
 check("consumo no puede listar rutas -> 403",
       cliente.get("/api/v1/rutas/", headers=H).status_code == 403)
 nueva = {"clave": "verificar-titulo", "url": "/api/v1/titulos/verificar/",
@@ -616,14 +617,14 @@ check("ahora la ruta sí se elimina -> 204",
 
 # ================== FASE 9: clasificaciones propias por clasificador ==================
 print("\n=== Fase 9: esquema (clasificaciones propias) en clasificadores ===")
-id_rc = id_de(RC, "clasificar")
+id_cl = id_de(RV, "clasificar")
 propias = {"classifications": [
     {"id": "matricula", "type": "MATRICULA", "description": "Matrícula vehicular ecuatoriana."},
 ]}
-r = cliente.put(f"/api/v1/procesadores/{id_rc}", json={"esquema": propias}, headers=A)
+r = cliente.put(f"/api/v1/procesadores/{id_cl}", json={"esquema": propias}, headers=A)
 check("guardar clasificaciones propias -> 200", r.status_code == 200, r.text[:200])
 reiniciar_capturas()
-cliente.post("/api/v1/clasificar/", files=ARCHIVO, headers=H)
+validar()
 cls = CAPTURAS["/classify"][-1].get("config", {}).get("classifications", [])
 check("classify usa las clasificaciones propias de la fila",
       any(c.get("id") == "matricula" for c in cls))
@@ -633,15 +634,15 @@ check("las globales (cedula) NO se usan en esta ruta",
       not any(c.get("id") == "cedula" for c in cls))
 
 # Sin esquema -> vuelve a los prompts globales de la tabla `clasificaciones`.
-cliente.put(f"/api/v1/procesadores/{id_rc}", json={"esquema": None}, headers=A)
+cliente.put(f"/api/v1/procesadores/{id_cl}", json={"esquema": None}, headers=A)
 reiniciar_capturas()
-cliente.post("/api/v1/clasificar/", files=ARCHIVO, headers=H)
+validar()
 cls = CAPTURAS["/classify"][-1].get("config", {}).get("classifications", [])
 check("sin esquema vuelve a los prompts globales",
       any(c.get("id") == "cedula" for c in cls))
 
 check("esquema inválido para clasificar -> 400",
-      cliente.put(f"/api/v1/procesadores/{id_rc}", json={"esquema": {"x": 1}},
+      cliente.put(f"/api/v1/procesadores/{id_cl}", json={"esquema": {"x": 1}},
                   headers=A).status_code == 400)
 
 # Importar las clasificaciones de un clasificador PUBLICADO en Extend (mismo
@@ -654,9 +655,9 @@ check("devuelve la lista classifications del clasificador",
       any(c.get("id") == "cedula_pub" for c in clasifs))
 
 # Empujar el esquema guardado AL procesador publicado (actualiza su borrador).
-cliente.put(f"/api/v1/procesadores/{id_rc}",
+cliente.put(f"/api/v1/procesadores/{id_cl}",
             json={"esquema": propias, "modo": "id", "procesador_id": "cl_sync1"}, headers=A)
-r = cliente.post(f"/api/v1/procesadores/{id_rc}/extend", headers=A)
+r = cliente.post(f"/api/v1/procesadores/{id_cl}/extend", headers=A)
 check("actualizar clasificador en Extend -> 200", r.status_code == 200, r.text[:200])
 b = (CAPTURAS.get("/processors/cl_sync1") or [None])[-1] or {}
 check("se envió config CLASSIFY con las clasificaciones propias",
@@ -668,7 +669,7 @@ check("el push sin publicar NO publica versión",
       r.json().get("version_publicada") is None)
 
 # Push + autopublicación de la versión (release minor).
-r = cliente.post(f"/api/v1/procesadores/{id_rc}/extend?publicar=true", headers=A)
+r = cliente.post(f"/api/v1/procesadores/{id_cl}/extend?publicar=true", headers=A)
 check("push + autopublicar -> 200 con la versión nueva",
       r.status_code == 200 and r.json().get("version_publicada") == "2.1", r.text[:200])
 pub = (CAPTURAS.get("/processors/cl_sync1/publish") or [None])[-1] or {}
@@ -688,7 +689,7 @@ check("fila sin procesador_id -> 400",
       cliente.post(f"/api/v1/procesadores/{id_de('ocr', 'parse')}/extend", headers=A).status_code == 400)
 
 # Restaurar el estado por defecto de las filas tocadas.
-cliente.put(f"/api/v1/procesadores/{id_rc}",
+cliente.put(f"/api/v1/procesadores/{id_cl}",
             json={"esquema": None, "modo": "inline", "procesador_id": None}, headers=A)
 cliente.put(f"/api/v1/procesadores/{id_ext}",
             json={"modo": "inline", "procesador_id": None}, headers=A)
@@ -722,6 +723,74 @@ check("cédula numérica inválida sigue dando 400 (fail-fast)",
       cliente.post("/api/v1/validaciones/validar-identidad/", files=ARCHIVO,
                    data={"cedula_sistema": "1234567890"}, headers=H).status_code == 400)
 
+# Consistencia con senescyt: el documento NO trae número -> no se pudo leer ->
+# match_document None (antes daba False, confundía "no leído" con "no coincide").
+MOCK_CLASIFICACION.update({"type": "CEDULA", "confidence": 0.95})
+MOCK_EXTRACCION.clear()
+MOCK_EXTRACCION.update({"apellidos": "PEREZ", "nombres": "JUAN"})
+r = cliente.post("/api/v1/validaciones/validar-identidad/", files=ARCHIVO,
+                 data={"cedula_sistema": "1710034065"}, headers=H)
+check("cédula sin número en el documento -> match_document None",
+      r.status_code == 200 and r.json().get("match_document") is None, r.text[:200])
+check("el mensaje avisa que no se pudo extraer",
+      "no se pudo extraer" in (r.json().get("message") or "").lower())
+
+# El extractor pierde el cero inicial de la cédula -> se recupera (zfill) y coincide.
+MOCK_EXTRACCION.clear()
+MOCK_EXTRACCION.update({"numero_cedula": "942112129", "apellidos": "MOLINA"})
+r = cliente.post("/api/v1/validaciones/validar-identidad/", files=ARCHIVO,
+                 data={"cedula_sistema": "0942112129"}, headers=H)
+check("cédula con cero inicial perdido -> coincide (zfill)",
+      r.json().get("match_document") is True, r.text[:200])
+
+# El extractor devuelve la cédula con prefijo ('Nº ...'): la comparación de la
+# rama CEDULA usa solo dígitos, las letras no la rompen.
+MOCK_EXTRACCION.clear()
+MOCK_EXTRACCION.update({"numero_cedula": "Nº 1710034065"})
+r = cliente.post("/api/v1/validaciones/validar-identidad/", files=ARCHIVO,
+                 data={"cedula_sistema": "1710034065"}, headers=H)
+check("cédula con prefijo 'Nº' -> coincide (solo dígitos)",
+      r.json().get("match_document") is True, r.text[:200])
+
+# Número extraído que falla el dígito verificador -> no comparable (None), no False.
+MOCK_EXTRACCION.clear()
+MOCK_EXTRACCION.update({"numero_cedula": "1710034066"})
+r = cliente.post("/api/v1/validaciones/validar-identidad/", files=ARCHIVO,
+                 data={"cedula_sistema": "1710034065"}, headers=H)
+check("verificador inválido en el documento -> match_document None",
+      r.json().get("match_document") is None, r.text[:200])
+
+# Sin cedula_sistema: reconocido y extraído, sin comparación.
+MOCK_EXTRACCION.clear()
+MOCK_EXTRACCION.update({"numero_cedula": "1710034065", "apellidos": "PEREZ"})
+r = cliente.post("/api/v1/validaciones/validar-identidad/", files=ARCHIVO, headers=H)
+check("sin cedula_sistema -> result True, match None, status extraido",
+      r.json().get("result") is True and r.json().get("match_document") is None
+      and r.json().get("status") == "extraido", r.text[:200])
+
+# Identidad reconocida pero extracción vacía y SIN cedula_sistema: el mensaje
+# ya no dice "datos extraídos" (antes mentía).
+MOCK_EXTRACCION.clear()
+r = cliente.post("/api/v1/validaciones/validar-identidad/", files=ARCHIVO, headers=H)
+check("extracción vacía sin cedula -> status extraccion_fallida",
+      r.json().get("status") == "extraccion_fallida", r.text[:200])
+check("el mensaje ya no dice 'datos extraídos'",
+      "datos extraídos" not in (r.json().get("message") or ""), r.text[:200])
+
+# Clase ajena -> no_reconocido y match None aunque se envíe una cédula válida.
+MOCK_CLASIFICACION.update({"type": "OTROS", "confidence": 0.99})
+r = cliente.post("/api/v1/validaciones/validar-identidad/", files=ARCHIVO,
+                 data={"cedula_sistema": "1710034065"}, headers=H)
+check("clase ajena -> result False, status no_reconocido, match None",
+      r.json().get("result") is False and r.json().get("status") == "no_reconocido"
+      and r.json().get("match_document") is None, r.text[:200])
+
+# Contrato de normalizar_nombre, documentado por aserción directa.
+from app.services.documentos import normalizar_nombre  # noqa: E402
+check("normalizar_nombre iguala Ñ y N (NFKD)", normalizar_nombre("PEÑA") == normalizar_nombre("pena"))
+check("normalizar_nombre ignora orden y tildes",
+      normalizar_nombre("PEREZ JUAN") == normalizar_nombre("Juan Pérez"))
+
 # Restaurar el mock para no contaminar otras corridas.
 MOCK_CLASIFICACION.update({"type": "CEDULA", "confidence": 0.95})
 MOCK_EXTRACCION.clear()
@@ -749,10 +818,10 @@ check("tras reiniciar, recarga del origen",
       cache.obtener("prueba", _cargar) == 3 and _n["v"] == 3)
 
 # Invalidación end-to-end: editar un procesador se refleja en el resolutor.
-procesadores.actualizar(id_de(RC, "clasificar"), umbral=0.5, tocar_umbral=True)
+procesadores.actualizar(id_de(RV, "clasificar"), umbral=0.5, tocar_umbral=True)
 check("escribir invalida la caché (el resolutor ve el cambio)",
-      abs(procesadores.umbral_clasificacion(RC) - 0.5) < 1e-9)
-procesadores.actualizar(id_de(RC, "clasificar"), umbral=0.85, tocar_umbral=True)
+      abs(procesadores.umbral_clasificacion(RV) - 0.5) < 1e-9)
+procesadores.actualizar(id_de(RV, "clasificar"), umbral=0.85, tocar_umbral=True)
 check("el pool reemplaza la conexión-por-operación",
       type(__import__("app.core.db", fromlist=["_obtener_pool"])._obtener_pool()).__name__ == "FakePool")
 
@@ -783,6 +852,7 @@ check("validar-registro-senescyt -> 200", r.status_code == 200, r.text[:300])
 d = r.json() if r.status_code == 200 else {}
 check("reconoce el registro (result True)", d.get("result") is True, r.text[:300])
 check("ambos datos coinciden -> match_document True", d.get("match_document") is True, r.text[:300])
+check("clase + datos -> status extraido", d.get("status") == "extraido", r.text[:300])
 check("devuelve los datos extraídos",
       (d.get("datos") or {}).get("numero_registro") == "1234-2026-ABC")
 cls = CAPTURAS["/classify"][-1].get("config", {}).get("classifications", [])
@@ -796,30 +866,60 @@ r = cliente.post("/api/v1/validaciones/validar-registro-senescyt/", files=ARCHIV
 check("sin parámetros -> result True", r.status_code == 200 and r.json().get("result") is True, r.text[:200])
 check("sin parámetros -> match_document None", r.json().get("match_document") is None, r.text[:200])
 
+# Mismo contrato de entrada que validar-identidad: identificación implausible -> 400.
+check("identificación corta en senescyt -> 400",
+      cliente.post("/api/v1/validaciones/validar-registro-senescyt/", files=ARCHIVO,
+                   data={"numero_identificacion": "AB1"}, headers=H).status_code == 400)
+check("cédula con verificador inválido en senescyt -> 400",
+      cliente.post("/api/v1/validaciones/validar-registro-senescyt/", files=ARCHIVO,
+                   data={"numero_identificacion": "1234567890"}, headers=H).status_code == 400)
+
 # Solo nombres (los None no se validan): coincide -> match_document True.
 r = cliente.post("/api/v1/validaciones/validar-registro-senescyt/", files=ARCHIVO,
                  data={"nombres": "molina jaramillo carlos andres"}, headers=H)
 check("solo nombres y coincide -> match_document True", r.json().get("match_document") is True, r.text[:200])
 
-# OR: identificación incorrecta pero nombres correctos -> match_document True.
+# OR: identificación incorrecta (pero válida) y nombres correctos -> match_document True.
 r = cliente.post("/api/v1/validaciones/validar-registro-senescyt/", files=ARCHIVO,
-                 data={"numero_identificacion": "1700000000", "nombres": "Carlos Andrés Molina Jaramillo"},
+                 data={"numero_identificacion": "1710034065", "nombres": "Carlos Andrés Molina Jaramillo"},
                  headers=H)
 check("uno coincide -> match_document True", r.json().get("match_document") is True, r.text[:200])
 
 # Ninguno coincide -> match_document False (pero sigue siendo un SENESCYT: result True).
 r = cliente.post("/api/v1/validaciones/validar-registro-senescyt/", files=ARCHIVO,
-                 data={"numero_identificacion": "1700000000", "nombres": "Juan Pérez"}, headers=H)
+                 data={"numero_identificacion": "1710034065", "nombres": "Juan Pérez"}, headers=H)
 check("ninguno coincide -> match_document False", r.json().get("match_document") is False, r.text[:200])
 check("es SENESCYT legible -> result True aunque no coincida", r.json().get("result") is True, r.text[:200])
 check("el mensaje señala identificación y nombres",
       "identificación" in (r.json().get("message") or "") and "nombres" in (r.json().get("message") or ""))
+
+# El extractor pierde el cero inicial de la cédula (la devuelve como número):
+# la comparación lo recupera con zfill y coincide.
+MOCK_EXTRACCION.clear()
+MOCK_EXTRACCION.update({"numero_registro": "1234-2026-ABC",
+                        "numero_identificacion": "942112129",
+                        "nombres_completos": "MOLINA JARAMILLO CARLOS ANDRES"})
+r = cliente.post("/api/v1/validaciones/validar-registro-senescyt/", files=ARCHIVO,
+                 data={"numero_identificacion": "0942112129"}, headers=H)
+check("cédula con cero inicial perdido -> match_document True (zfill)",
+      r.json().get("match_document") is True, r.text[:200])
+
+# El documento NO trae el campo a comparar -> no se valida (None), no "no coincide".
+MOCK_EXTRACCION.clear()
+MOCK_EXTRACCION.update({"numero_registro": "1234-2026-ABC", "titulo": "Magíster"})
+r = cliente.post("/api/v1/validaciones/validar-registro-senescyt/", files=ARCHIVO,
+                 data={"nombres": "Carlos Andrés Molina Jaramillo"}, headers=H)
+check("campo ausente en el documento -> match_document None", r.json().get("match_document") is None, r.text[:200])
+check("el mensaje avisa que no se pudo leer para verificar",
+      "verificar la identidad" in (r.json().get("message") or ""))
 
 # SENESCYT pero SIN datos: result sigue la clase (True), pero avisa del extractor.
 MOCK_EXTRACCION.clear()
 r = cliente.post("/api/v1/validaciones/validar-registro-senescyt/", files=ARCHIVO, data=SEN_OK, headers=H)
 check("SENESCYT sin datos -> result True (refleja la clasificación)",
       r.status_code == 200 and r.json().get("result") is True, r.text[:200])
+check("SENESCYT sin datos -> status extraccion_fallida",
+      r.json().get("status") == "extraccion_fallida", r.text[:200])
 check("el mensaje avisa que falló el extractor / documento ilegible",
       "extractor" in (r.json().get("message") or ""))
 MOCK_EXTRACCION.clear()
@@ -830,6 +930,7 @@ MOCK_CLASIFICACION.update({"type": "CEDULA", "confidence": 0.97})
 r = cliente.post("/api/v1/validaciones/validar-registro-senescyt/", files=ARCHIVO, data=SEN_OK, headers=H)
 check("documento ajeno -> result False y datos vacíos",
       r.status_code == 200 and r.json().get("result") is False and r.json().get("datos") == {})
+check("documento ajeno -> status no_reconocido", r.json().get("status") == "no_reconocido", r.text[:200])
 
 MOCK_CLASIFICACION.update({"type": "CEDULA", "confidence": 0.95})
 MOCK_EXTRACCION.clear()
