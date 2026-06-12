@@ -659,7 +659,7 @@ cliente.put(f"/api/v1/procesadores/{id_ext}",
 print("\n=== Fase 10: validar-identidad compara según la clase detectada ===")
 MOCK_CLASIFICACION.update({"type": "PASAPORTE", "confidence": 0.97})
 MOCK_EXTRACCION.clear()
-MOCK_EXTRACCION.update({"numero_pasaporte": " a123-4567 ", "apellidos": "PEREZ"})
+MOCK_EXTRACCION.update({"numero_identificacion": " a123-4567 ", "apellidos": "PEREZ"})
 
 r = cliente.post("/api/v1/validaciones/validar-identidad/", files=ARCHIVO,
                  data={"cedula_sistema": "A1234567"}, headers=H)
@@ -668,6 +668,8 @@ d = r.json() if r.status_code == 200 else {}
 check("pasaporte es identidad (result True)", d.get("result") is True)
 check("compara alfanumérico normalizado -> coincide",
       d.get("match_document") is True, r.text[:300])
+check("número de pasaporte se devuelve con prefijo VS-",
+      d.get("datos", {}).get("numero_identificacion") == "VS-a123-4567", r.text[:300])
 
 r = cliente.post("/api/v1/validaciones/validar-identidad/", files=ARCHIVO,
                  data={"cedula_sistema": "B9999999"}, headers=H)

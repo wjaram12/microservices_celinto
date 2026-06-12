@@ -23,6 +23,7 @@ from app.services.prompts import prompts
 LONGITUD_CEDULA = 10
 CLASE_CEDULA = "CEDULA"
 CLASE_PASAPORTE = "PASAPORTE"
+PREFIJO_PASAPORTE = "VS-"
 CLASE_SENESCYT = "REGISTRO_SENESCYT"
 TIPOS_IDENTIDAD = {CLASE_CEDULA, CLASE_PASAPORTE}
 FORMATOS_ACEPTADOS = {"application/pdf", "image/jpeg", "image/png"}
@@ -154,6 +155,26 @@ def numero_en_datos(datos: dict) -> str:
     """Número de cédula entre los campos extraídos, normalizado a solo dígitos
     ('' si no aparece bajo ninguna clave conocida)."""
     return normalizar_cedula(valor_en_datos(datos, _CLAVES_NUMERO))
+
+
+def anteponer_prefijo_pasaporte(datos: dict) -> dict:
+    """
+    Antepone 'VS-' al número de pasaporte en los campos extraídos (solo el
+    valor que se devuelve en la respuesta; NO afecta la comparación). Marca el
+    primer campo presente entre las claves de pasaporte —el mismo que usa la
+    comparación— y es idempotente: no duplica el prefijo si ya lo tiene.
+    """
+    for clave in _CLAVES_PASAPORTE:
+        valor = (datos or {}).get(clave)
+        if valor is None:
+            continue
+        texto = str(valor).strip()
+        if not texto:
+            continue
+        if not texto.upper().startswith(PREFIJO_PASAPORTE):
+            datos[clave] = f"{PREFIJO_PASAPORTE}{texto}"
+        return datos
+    return datos
 
 
 # Claves bajo las que puede venir el número de registro de un título SENESCYT.
@@ -292,6 +313,10 @@ class ServicioDocumentos:
         No usa OCR/parse: el número del documento sale de la extracción
         estructurada, no del texto. (El campo `ocr` de la respuesta quedó
         deprecado y siempre es null.)
+
+        Si la clase es PASAPORTE, el número de pasaporte se devuelve en `datos`
+        con el prefijo 'VS-'; la comparación con `cedula_sistema` sigue usando
+        el número crudo (sin prefijo).
         """
         id_sistema = None
         if cedula_sistema and cedula_sistema.strip():
@@ -353,6 +378,12 @@ class ServicioDocumentos:
                 resultado["coincide"] = bool(id_documento) and id_sistema == id_documento
             else:
                 resultado["coincide"] = False
+
+        # El número de pasaporte se devuelve con el prefijo 'VS-'. Se hace al
+        # final, después de la comparación, para que `coincide` siga usando el
+        # número crudo extraído (el sistema envía el pasaporte sin prefijo).
+        if es_identidad and clase == CLASE_PASAPORTE:
+            resultado["datos"] = anteponer_prefijo_pasaporte(datos)
 
         return resultado
 

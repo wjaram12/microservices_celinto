@@ -102,7 +102,7 @@ _ESQUEMA_CEDULA = {
 _ESQUEMA_PASAPORTE = {
     "type": "object",
     "properties": {
-        "numero_pasaporte": _campo("Número de pasaporte."),
+        "numero_identificacion": _campo("Número de identificación del titular (número de pasaporte)."),
         "pais_emisor": _campo("País emisor (código o nombre)."),
         "apellidos": _campo("Apellidos del titular (surname)."),
         "nombres": _campo("Nombres del titular (given names)."),
