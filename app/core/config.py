@@ -13,14 +13,16 @@ class Settings(BaseSettings):
     esquemas) vive en app/core/procesadores.py como variables globales y NO va
     al .env. Si una variable obligatoria falta en el .env, la app falla al
     iniciar.
+
+    REDIS_URL tiene un default local para desarrollo; en producción se sobreescribe
+    con el Redis real vía .env (caché centralizada compartida por los workers de
+    gunicorn).
     """
 
     EXTEND_API_KEY: str
 
     DATABASE_URL: str
 
-    # Caché centralizada compartida por los workers de gunicorn. Tiene un default
-    # local para desarrollo; en producción se apunta al Redis real vía .env.
     REDIS_URL: str = "redis://localhost:6379/0"
 
     model_config = SettingsConfigDict(

@@ -15,6 +15,10 @@ PostgreSQL en cada inferencia.
 Degradación: si Redis no responde (caído, reinicio), NO se tumba la inferencia.
 `obtener` cae a leer del origen (PostgreSQL) directamente; el servicio sigue
 arriba y solo pierde la caché mientras Redis vuelve.
+
+Todas las claves se escriben bajo el prefijo PREFIJO para aislar el namespace del
+servicio en un Redis compartido; `reiniciar()` solo borra claves bajo ese prefijo
+sin tocar las de otros servicios.
 """
 import json
 import logging
@@ -27,9 +31,6 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Prefijo de namespace de TODAS las claves de este servicio en Redis (que puede
-# ser compartido con otros servicios). `reiniciar()` borra exactamente lo que
-# cae bajo este prefijo, sin tocar claves ajenas.
 PREFIJO = "clasificador:cache:"
 
 _cliente = None

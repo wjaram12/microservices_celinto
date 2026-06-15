@@ -33,11 +33,6 @@ logger = logging.getLogger(__name__)
 EXTEND_BASE_URL = "https://api.extend.ai"
 EXTEND_API_VERSION = "2026-02-09"
 
-# Excepciones de red de httpx que vale la pena reintentar: fallos al ESTABLECER o
-# mantener la conexión (transitorios y baratos). Se EXCLUYEN ReadTimeout y
-# WriteTimeout a propósito: cuando saltan ya se esperó el timeout completo (hasta
-# 300s), y reintentarlas multiplicaría la latencia que el consumidor —que llama
-# de forma síncrona— está bloqueado esperando.
 _RED_REINTENTABLE = (
     httpx.ConnectError,
     httpx.ConnectTimeout,
@@ -73,15 +68,20 @@ def _leer_retry_after(respuesta: httpx.Response) -> Optional[float]:
 
 
 class ClienteExtend:
-    """Cliente HTTP async hacia Extend, con el manejo de errores centralizado."""
+    """
+    Cliente HTTP async hacia Extend, con el manejo de errores centralizado.
 
-    # Reintentos de fallos transitorios (red/429/5xx). Acotados a propósito: el
-    # consumidor llama de forma síncrona, así que el peor caso de latencia añadida
-    # es (MAX_INTENTOS - 1) esperas, con tope ESPERA_MAX cada una.
+    Los reintentos (MAX_INTENTOS, ESPERA_INICIAL, ESPERA_MAX) están acotados a
+    propósito: el consumidor llama de forma síncrona, así que el peor caso de
+    latencia añadida es (MAX_INTENTOS - 1) esperas con backoff exponencial y
+    jitter, con tope ESPERA_MAX por espera (que también acota el header
+    Retry-After).
+    """
+
     MAX_INTENTOS = 3
-    ESPERA_INICIAL = 0.5  # segundos; backoff exponencial con jitter
-    ESPERA_MAX = 8.0      # tope por espera (también acota Retry-After)
-    _dormir = staticmethod(asyncio.sleep)  # inyectable en pruebas
+    ESPERA_INICIAL = 0.5
+    ESPERA_MAX = 8.0
+    _dormir = staticmethod(asyncio.sleep)
 
     def __init__(self):
         self._cliente: Optional[httpx.AsyncClient] = None

@@ -14,6 +14,7 @@ helpers de cédula -> la clase con las operaciones de alto nivel.
 import asyncio
 import re
 import unicodedata
+from enum import StrEnum
 from typing import Optional, Tuple
 
 from app.services.errores import ErrorDeArchivo, ErrorDeValidacion
@@ -21,20 +22,35 @@ from app.services.extend import extend
 from app.services.procesadores import OTRO_POR_DEFECTO, procesadores
 from app.services.prompts import prompts
 
+
+class ClaseDocumento(StrEnum):
+    CEDULA = "CEDULA"
+    PASAPORTE = "PASAPORTE"
+    SENESCYT = "REGISTRO_SENESCYT"
+    CARTA_COMPROMISO = "CARTA_COMPROMISO"
+    APOSTILLA = "APOSTILLA"
+    DEPOSITO = "DEPOSITO"
+    TRANSFERENCIA = "TRANSFERENCIA"
+
+
+class RutaAPI(StrEnum):
+    VALIDAR = "validar-identidad"
+    OCR = "ocr"
+    SENESCYT = "validar-registro-senescyt"
+    PAGO = "validar-pago"
+
+
+class EstadoValidacion(StrEnum):
+    NO_RECONOCIDO = "no_reconocido"
+    EXTRACCION_FALLIDA = "extraccion_fallida"
+    EXTRAIDO = "extraido"
+
+
 LONGITUD_CEDULA = 10
-CLASE_CEDULA = "CEDULA"
-CLASE_PASAPORTE = "PASAPORTE"
 PREFIJO_PASAPORTE = "VS-"
-CLASE_SENESCYT = "REGISTRO_SENESCYT"
-CLASE_CARTA_COMPROMISO = "CARTA_COMPROMISO"
-CLASE_APOSTILLA = "APOSTILLA"
-CLASE_DEPOSITO = "DEPOSITO"
-CLASE_TRANSFERENCIA = "TRANSFERENCIA"
-TIPOS_IDENTIDAD = {CLASE_CEDULA, CLASE_PASAPORTE}
-# Clases aceptadas por la ruta validar-registro-senescyt: las tres comparan
-# identidad igual (numero_identificacion / nombres) y cada una tiene su extractor.
-TIPOS_SENESCYT = {CLASE_SENESCYT, CLASE_CARTA_COMPROMISO, CLASE_APOSTILLA}
-TIPOS_PAGO = {CLASE_DEPOSITO, CLASE_TRANSFERENCIA}
+TIPOS_IDENTIDAD = frozenset({ClaseDocumento.CEDULA, ClaseDocumento.PASAPORTE})
+TIPOS_SENESCYT = frozenset({ClaseDocumento.SENESCYT, ClaseDocumento.CARTA_COMPROMISO, ClaseDocumento.APOSTILLA})
+TIPOS_PAGO = frozenset({ClaseDocumento.DEPOSITO, ClaseDocumento.TRANSFERENCIA})
 FORMATOS_ACEPTADOS = {"application/pdf", "image/jpeg", "image/png"}
 MAX_BYTES = 15 * 1024 * 1024
 PATRON_CEDULA = re.compile(r"\b\d{10}\b")
@@ -42,40 +58,30 @@ _PATRON_NO_DIGITO = re.compile(r"\D")
 _PATRON_NO_ALFANUM = re.compile(r"[^A-Z0-9]")
 _PATRON_TOKEN_NOMBRE = re.compile(r"[a-z0-9]+")
 
-RUTA_VALIDAR = "validar-identidad"
-RUTA_OCR = "ocr"
-RUTA_SENESCYT = "validar-registro-senescyt"
-RUTA_PAGO = "validar-pago"
-
 TIPOS_DESCARTE = {"other", "otros"}
 
-# Estado estructurado de las rutas de validación (campo `status`): da a los
-# consumidores una señal legible por máquina, sin tener que parsear `message`
-# ni inferir de si `datos` viene vacío.
-ESTADO_NO_RECONOCIDO = "no_reconocido"       # la clase no es la esperada por la ruta
-ESTADO_EXTRACCION_FALLIDA = "extraccion_fallida"  # clase correcta pero sin datos
-ESTADO_EXTRAIDO = "extraido"                 # clase correcta y datos extraídos
 
-
-def estado_validacion(es_clase_esperada: bool, datos: dict) -> str:
+def estado_validacion(es_clase_esperada: bool, datos: dict) -> EstadoValidacion:
     """Estado estructurado común a validar-identidad y validar-registro-senescyt."""
     if not es_clase_esperada:
-        return ESTADO_NO_RECONOCIDO
+        return EstadoValidacion.NO_RECONOCIDO
     if not datos:
-        return ESTADO_EXTRACCION_FALLIDA
-    return ESTADO_EXTRAIDO
+        return EstadoValidacion.EXTRACCION_FALLIDA
+    return EstadoValidacion.EXTRAIDO
 
 
-# Tope de lecturas de configuración concurrentes fuera del event loop. Si Redis
-# cae, cada lectura degrada a PostgreSQL y el pool (ThreadedConnectionPool de 10)
-# lanza PoolError al agotarse en vez de esperar; con el tope por debajo de las
-# conexiones del pool, las peticiones hacen cola aquí en lugar de fallar con 500.
 _LECTURAS_CONFIG = asyncio.Semaphore(8)
 
 
 async def _config_en_hilo(func, *args):
-    """Ejecuta un resolutor de configuración (I/O síncrono de Redis/PG) en un
-    hilo para no bloquear el event loop, acotado por _LECTURAS_CONFIG."""
+    """
+    Ejecuta un resolutor de configuración (I/O síncrono de Redis/PG) en un hilo
+    para no bloquear el event loop.
+
+    El semáforo _LECTURAS_CONFIG acota las lecturas concurrentes: si Redis cae,
+    cada lectura degrada a PostgreSQL y el pool puede agotarse; con el tope por
+    debajo del pool size, las peticiones hacen cola aquí en vez de fallar con 500.
+    """
     async with _LECTURAS_CONFIG:
         return await asyncio.to_thread(func, *args)
 
@@ -198,7 +204,6 @@ _CLAVES_PASAPORTE = (
     "numero_pasaporte", "pasaporte", "numero_documento",
     "numero_identificacion", "numero",
 )
-# Claves bajo las que el extractor SENESCYT puede devolver el nombre del titular.
 _CLAVES_NOMBRE = (
     "nombres_completos", "nombres_apellidos", "nombre_completo",
     "nombres_y_apellidos", "nombres",
@@ -384,7 +389,7 @@ class ServicioDocumentos:
         indica si aparece y en qué contexto."""
         preprocesar(contenido, mime_type)
         file_id = await extend.subir_archivo(contenido, mime_type, nombre)
-        texto = await self._extraer_texto(file_id, RUTA_OCR)
+        texto = await self._extraer_texto(file_id, RutaAPI.OCR)
 
         busqueda = None
         if texto_a_buscar and texto_a_buscar.strip():
@@ -423,13 +428,13 @@ class ServicioDocumentos:
 
         preprocesar(contenido, mime_type)
         file_id = await extend.subir_archivo(contenido, mime_type, nombre)
-        clase, confianza, umbral = await self._clasificar_archivo(file_id, RUTA_VALIDAR)
-        es_cedula = clase == CLASE_CEDULA and confianza >= umbral
+        clase, confianza, umbral = await self._clasificar_archivo(file_id, RutaAPI.VALIDAR)
+        es_cedula = clase == ClaseDocumento.CEDULA and confianza >= umbral
         es_identidad = clase in TIPOS_IDENTIDAD and confianza >= umbral
 
         datos = {}
         if es_identidad:
-            datos = await self._extraer_datos(RUTA_VALIDAR, clase, file_id)
+            datos = await self._extraer_datos(RutaAPI.VALIDAR, clase, file_id)
 
         resultado = {
             "clase_detectada": clase,
@@ -448,10 +453,7 @@ class ServicioDocumentos:
             resultado["identificacion_sistema"] = cedula_sistema
 
             if es_identidad:
-                if clase == CLASE_CEDULA:
-                    # Solo dígitos (tolera prefijos como 'Nº'), recuperando el
-                    # cero inicial que el extractor pierde al devolver la cédula
-                    # como número (942112129 -> 0942112129).
+                if clase == ClaseDocumento.CEDULA:
                     id_documento = numero_en_datos(datos)
                     if id_documento and len(id_documento) < LONGITUD_CEDULA:
                         id_documento = id_documento.zfill(LONGITUD_CEDULA)
@@ -461,16 +463,9 @@ class ServicioDocumentos:
                         valor_en_datos(datos, _CLAVES_PASAPORTE)
                     ) or None
                 resultado["identificacion_documento"] = id_documento
-                # None cuando el documento no trae el número (no se pudo leer);
-                # True/False solo cuando ambos lados están presentes. Coherente con
-                # validar-registro-senescyt.
                 resultado["coincide"] = (id_sistema == id_documento) if id_documento else None
-            # Si no es identidad, `coincide` queda None: no hay nada que comparar.
 
-        # El número de pasaporte se devuelve con el prefijo 'VS-'. Se hace al
-        # final, después de la comparación, para que `coincide` siga usando el
-        # número crudo extraído (el sistema envía el pasaporte sin prefijo).
-        if es_identidad and clase == CLASE_PASAPORTE:
+        if es_identidad and clase == ClaseDocumento.PASAPORTE:
             resultado["datos"] = anteponer_prefijo_pasaporte(datos)
 
         return resultado
@@ -501,27 +496,19 @@ class ServicioDocumentos:
         ninguno, y None si no se envió ninguno. Usa clasificador + extractor (sin
         OCR); el extractor se configura por ruta en la tabla `procesadores`.
         """
-        # Mismo contrato de entrada que validar-identidad: si se envía una
-        # identificación, debe ser una cédula o pasaporte plausible (fail-fast,
-        # ANTES de gastar la llamada a Extend).
         if numero_identificacion and numero_identificacion.strip():
             validar_identificacion_sistema(numero_identificacion)
 
         preprocesar(contenido, mime_type)
         file_id = await extend.subir_archivo(contenido, mime_type, nombre)
-        clase, confianza, umbral = await self._clasificar_archivo(file_id, RUTA_SENESCYT)
+        clase, confianza, umbral = await self._clasificar_archivo(file_id, RutaAPI.SENESCYT)
 
-        # El clasificador lo reconoce como una de las clases aceptadas por la ruta
-        # (registro SENESCYT, carta de compromiso de subida de título o apostilla).
-        # Las tres comparan identidad igual; el extractor se elige por clase.
         existe_clase = clase in TIPOS_SENESCYT and confianza >= umbral
 
         datos = {}
         if existe_clase:
-            datos = await self._extraer_datos(RUTA_SENESCYT, clase, file_id)
+            datos = await self._extraer_datos(RutaAPI.SENESCYT, clase, file_id)
 
-        # Contraste de identidad: solo se evalúan los campos enviados (los None se
-        # omiten). match_document es True si al menos uno de los enviados coincide.
         coincide_identificacion = comparar_campo(
             numero_identificacion, valor_en_datos(datos, _CLAVES_NUMERO),
             normalizar_identificacion_comparable)
@@ -555,13 +542,13 @@ class ServicioDocumentos:
         """
         preprocesar(contenido, mime_type)
         file_id = await extend.subir_archivo(contenido, mime_type, nombre)
-        clase, confianza, umbral = await self._clasificar_archivo(file_id, RUTA_PAGO)
+        clase, confianza, umbral = await self._clasificar_archivo(file_id, RutaAPI.PAGO)
 
         es_pago = clase in TIPOS_PAGO and confianza >= umbral
 
         datos = {}
         if es_pago:
-            datos = await self._extraer_datos(RUTA_PAGO, clase, file_id)
+            datos = await self._extraer_datos(RutaAPI.PAGO, clase, file_id)
 
         return {
             "clase_detectada": clase,

@@ -1,11 +1,11 @@
 {% extends "base.html" %}
 {% block titulo %}Procesadores · Administración{% endblock %}
-{% block titulo_pagina %}🧩 Procesadores{% endblock %}
-{% block subtitulo %}Procesadores de Extend por ruta: clasificadores, extractores, esquemas y umbrales.{% endblock %}
+{% block titulo_pagina %}Procesadores{% endblock %}
+{% block subtitulo %}Configuraciones de Extend por ruta: clasificadores, extractores y parsers. Se aplican en caliente, sin redeploy.{% endblock %}
 
 {% block contenido %}
 <div class="toolbar">
-  <input type="text" id="p-buscar" placeholder="Buscar por ruta, operación, clase…" oninput="filtrarTabla('p-buscar','p-cuerpo')">
+  <input type="text" id="p-buscar" placeholder="Buscar por ruta, operación, clase…" oninput="filtrarProcs()">
   <button class="btn-principal" onclick="abrirCrearProc()">➕ Nuevo procesador</button>
 </div>
 
@@ -13,8 +13,8 @@
   <table class="tabla">
     <thead>
       <tr>
-        <th>Ruta</th><th>Operación</th><th>Clase</th><th>Modo</th>
-        <th>Procesador</th><th>Umbral</th><th>Estado</th>
+        <th>Operación</th><th>Clase</th><th>Modo</th>
+        <th>Procesador / Config</th><th>Umbral</th><th>Estado</th>
         <th class="celda-acciones">Acciones</th>
       </tr>
     </thead>
@@ -27,138 +27,318 @@
   <div class="modal ancha">
     <h3 id="mp-titulo">Nuevo procesador</h3>
     <p class="modal-sub">Une una ruta del catálogo con su procesador de Extend (publicado o inline).</p>
-    <div class="fila">
-      <div>
-        <label for="pr-ruta">Ruta (catálogo de Rutas)</label>
-        <select id="pr-ruta"></select>
+
+    <!-- Sección 1: identidad de la fila (ruta + operación + clase) -->
+    <div class="seccion-modal">
+      <div class="seccion-modal-titulo">Identidad</div>
+      <div class="fila">
+        <div>
+          <label for="pr-ruta">Ruta</label>
+          <select id="pr-ruta"></select>
+          <span class="campo-ayuda">Ruta del catálogo que usará este procesador.</span>
+        </div>
+        <div>
+          <label for="pr-operacion">Operación</label>
+          <select id="pr-operacion">
+            <option value="clasificar">clasificar — detecta el tipo de documento</option>
+            <option value="extraer">extraer — lee campos del documento</option>
+            <option value="parse">parse — convierte a texto (OCR)</option>
+          </select>
+        </div>
+        <div>
+          <label for="pr-clase">Clase del documento</label>
+          <input type="text" id="pr-clase" placeholder="CEDULA, PASAPORTE, DEPOSITO…">
+          <span class="campo-ayuda">Solo para "extraer": qué tipo de documento extrae esta fila. Vacío si aplica a todas las clases.</span>
+        </div>
       </div>
-      <div>
-        <label for="pr-operacion">Operación</label>
-        <select id="pr-operacion">
-          <option value="clasificar">clasificar</option>
-          <option value="extraer">extraer</option>
-          <option value="parse">parse (OCR)</option>
-        </select>
+      <div id="identidad-fija-aviso" class="nota-info oculto">
+        La identidad (ruta, operación y clase) no se puede cambiar al editar. Elimina y vuelve a crear si necesitas modificarla.
       </div>
-      <div>
-        <label for="pr-clase">Clase (solo extraer)</label>
-        <input type="text" id="pr-clase" placeholder="CEDULA, PASAPORTE…">
-      </div>
-      <div>
+    </div>
+
+    <!-- Sección 2: modo de ejecución -->
+    <div class="seccion-modal">
+      <div class="seccion-modal-titulo">Modo de ejecución</div>
+      <div style="max-width:360px">
         <label for="pr-modo">Modo</label>
-        <select id="pr-modo">
-          <option value="inline">inline (config / esquema aquí)</option>
-          <option value="id">id (publicado en Extend)</option>
+        <select id="pr-modo" onchange="actualizarModo()">
+          <option value="inline">inline — la configuración se guarda aquí</option>
+          <option value="id">id — usa un procesador publicado en Extend Studio</option>
         </select>
+        <span class="campo-ayuda">
+          <b>inline</b>: el clasificador o extractor usa las clasificaciones / campos definidos abajo.<br>
+          <b>id</b>: delega en un procesador ya publicado en Extend Studio (cl_… o ex_…).
+        </span>
       </div>
     </div>
 
-    <label for="pr-pid">Procesador publicado (solo modo id: cl_… / ex_…)</label>
-    <input type="text" id="pr-pid" placeholder="cl_… para clasificar, ex_… para extraer">
-    <div class="acciones">
-      <button class="btn-suave" type="button"
-              onclick="cargarExtend($('#pr-operacion').val(),'pr-extend','pr-version','pr-pid')">
-        ⤓ Cargar procesadores de Extend
-      </button>
-    </div>
-    <div class="fila">
-      <div>
-        <label for="pr-extend">Procesador de Extend (sincronizado)</label>
-        <select id="pr-extend" onchange="elegirExtend('pr-extend','pr-version','pr-pid')"><option value="">—</option></select>
+    <!-- Sección 3: procesador publicado (solo cuando modo = id) -->
+    <div id="seccion-modo-id" class="seccion-modal oculto">
+      <div class="seccion-modal-titulo">Procesador publicado en Extend</div>
+      <label for="pr-pid">ID del procesador</label>
+      <input type="text" id="pr-pid" placeholder="cl_… para clasificar · ex_… para extraer">
+      <span class="campo-ayuda">Copia el ID desde Extend Studio. Empieza con <b>cl_</b> para clasificadores o <b>ex_</b> para extractores.</span>
+      <div class="acciones">
+        <button class="btn-suave" type="button"
+                onclick="cargarExtend($('#pr-operacion').val(),'pr-extend','pr-version','pr-pid')">
+          Cargar desde Extend Studio
+        </button>
       </div>
-      <div>
-        <label for="pr-version">Versión a ejecutar</label>
-        <select id="pr-version">
-          <option value="">última publicada</option>
-          <option value="draft">borrador (draft — cambios sin publicar)</option>
-        </select>
+      <div class="fila" style="margin-top:4px">
+        <div>
+          <label for="pr-extend">Procesador (sincronizado)</label>
+          <select id="pr-extend" onchange="elegirExtend('pr-extend','pr-version','pr-pid')"><option value="">— Elige uno —</option></select>
+        </div>
+        <div>
+          <label for="pr-version">Versión a ejecutar</label>
+          <select id="pr-version">
+            <option value="">Última publicada (recomendado)</option>
+            <option value="draft">Borrador — cambios sin publicar aún</option>
+          </select>
+          <span class="campo-ayuda">Fija una versión solo si necesitas reproducibilidad exacta.</span>
+        </div>
       </div>
-    </div>
-    <label style="display:flex;align-items:center;gap:8px;font-weight:400;margin-top:12px">
-      <input type="checkbox" id="pr-sync" checked style="width:auto">
-      ⬆ Al guardar, actualizar también este esquema en Extend
-      <span class="meta" style="margin:0">(versión borrador del procesador publicado)</span>
-    </label>
-    <label style="display:flex;align-items:center;gap:8px;font-weight:400;margin-top:6px">
-      <input type="checkbox" id="pr-publicar" style="width:auto">
-      🚀 …y publicar la versión automáticamente (release minor)
-      <span class="meta" style="margin:0">(⚠ las rutas en "última publicada" usarán el cambio de inmediato)</span>
-    </label>
 
-    <label for="pr-umbral">Umbral de confianza (solo clasificar: 0–1, ej. 0.85)</label>
-    <input type="text" id="pr-umbral" placeholder="vacío = 0.85 por defecto">
+      <div class="nota-advertencia" style="margin-top:14px">
+        <div class="nota-fila">
+          <label class="label-check" for="pr-sync">
+            <input type="checkbox" id="pr-sync" checked>
+            Al guardar, empujar este esquema al borrador del procesador en Extend
+          </label>
+        </div>
+        <div class="nota-fila" style="margin-top:6px">
+          <label class="label-check" for="pr-publicar">
+            <input type="checkbox" id="pr-publicar">
+            Publicar la versión automáticamente (release minor)
+          </label>
+          <span class="campo-ayuda campo-ayuda-error">
+            Las rutas configuradas en "última publicada" usarán el cambio de inmediato.
+          </span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Umbral (solo clasificar) -->
+    <div id="seccion-umbral" class="seccion-modal oculto">
+      <div class="seccion-modal-titulo">Umbral de confianza</div>
+      <div style="max-width:200px">
+        <label for="pr-umbral">Umbral mínimo (0 – 1)</label>
+        <input type="text" id="pr-umbral" placeholder="0.85">
+        <span class="campo-ayuda">El clasificador debe superar este nivel de confianza para dar el tipo por válido. Vacío = 0.85.</span>
+      </div>
+    </div>
 
     <!-- Builder de clasificaciones (solo operación 'clasificar' en modo inline):
          las clases que el modelo puede devolver, con la descripción que lo guía. -->
-    <div id="clasif-seccion">
-      <label>Schema builder — clasificaciones de este clasificador</label>
+    <div id="clasif-seccion" class="seccion-modal">
+      <div class="seccion-modal-titulo">Clasificaciones de este clasificador</div>
       <p class="modal-sub">
-        Define cada clase con su clave, etiqueta y descripción (el prompt que guía al
-        modelo). Si lo dejas vacío, esta ruta usa los prompts globales. La clase de
-        descarte 'other' se añade sola si no la defines.
+        Define cada tipo de documento que este clasificador puede detectar.
+        La <b>descripción</b> es el prompt que guía al modelo: cuanto más detallada,
+        mejor clasifica. Si dejas la tabla vacía, la ruta usará los prompts globales.
+        La clase de descarte <code>other</code> se añade sola.
       </p>
       <div class="tabla-envoltura">
         <table class="tabla">
           <thead>
-            <tr><th>Clave (id)</th><th>Etiqueta (type)</th><th>Descripción (prompt que guía al modelo)</th><th></th></tr>
+            <tr>
+              <th title="Identificador interno único, en minúsculas (ej: cedula, deposito). Se usa como id en la llamada a Extend.">Clave (id)</th>
+              <th title="Etiqueta que devuelve Extend al clasificar (ej: CEDULA). En mayúsculas por convención.">Etiqueta (type)</th>
+              <th title="Describe el documento con el mayor detalle posible. Es el prompt que guía al modelo para reconocerlo.">Descripción — prompt al modelo</th>
+              <th></th>
+            </tr>
           </thead>
           <tbody id="cb-cuerpo"></tbody>
         </table>
       </div>
       <div class="acciones">
-        <button class="btn-suave" type="button" onclick="agregarClasif()">➕ Añadir clasificación</button>
-        <button class="btn-suave" type="button" onclick="importarClasifs('pr-pid','pr-version')">⤓ Importar de Extend</button>
-        <button class="btn-suave" type="button" onclick="exportarJson(construirClasifs, 'clasificaciones')">⬇ Exportar JSON</button>
-        <button class="btn-texto" type="button" onclick="alternarJsonClasif()">{ } Ver JSON</button>
+        <button class="btn-suave" type="button" onclick="agregarClasif()">➕ Añadir clase</button>
+        <button class="btn-suave" type="button" onclick="importarClasifs('pr-pid','pr-version')">Importar de Extend</button>
+        <button class="btn-suave" type="button" onclick="exportarJson(construirClasifs, 'clasificaciones')">Exportar JSON</button>
+        <button class="btn-texto" type="button" onclick="alternarJsonClasif()">{ } Ver JSON generado</button>
       </div>
-      <pre id="cb-json" class="oculto"
-           style="background:var(--md-surface-container);border-radius:var(--md-radio-s);padding:12px;font-size:.78rem;overflow:auto"></pre>
+      <pre id="cb-json" class="oculto json-preview"></pre>
     </div>
 
     <!-- Schema builder (solo operación 'extraer'): define las propiedades del
          esquema con clave, tipo y descripción; el JSON Schema se genera solo. -->
-    <div id="sb-seccion">
-      <label>Schema builder — campos que extrae este procesador</label>
+    <div id="sb-seccion" class="seccion-modal">
+      <div class="seccion-modal-titulo">Campos que extrae este procesador</div>
       <p class="modal-sub">
-        Añade propiedades y configura su clave, tipo y descripción. La descripción
-        le dice al modelo cómo reconocer el campo en el documento.
+        Cada fila define un campo que el modelo intentará leer del documento.
+        La <b>descripción</b> es el prompt: explica dónde aparece el dato y su formato.
+        Cuanto más precisa, mejor extrae.
       </p>
       <div class="tabla-envoltura">
         <table class="tabla">
           <thead>
-            <tr><th>Clave</th><th>Tipo</th><th>Descripción (guía al modelo)</th><th></th></tr>
+            <tr>
+              <th title="Nombre de la propiedad en el JSON de respuesta, en snake_case (ej: numero_cedula).">Clave (snake_case)</th>
+              <th title="Tipo del dato esperado. 'Avanzado' indica un tipo complejo importado de Extend.">Tipo</th>
+              <th title="Describe cómo aparece este campo en el documento. Incluye ejemplos y formato si ayuda al modelo.">Descripción — prompt al modelo</th>
+              <th></th>
+            </tr>
           </thead>
           <tbody id="sb-cuerpo"></tbody>
         </table>
       </div>
       <div class="acciones">
         <button class="btn-suave" type="button" onclick="agregarCampo()">➕ Añadir campo</button>
-        <button class="btn-suave" type="button" onclick="importarEsquema('pr-pid','pr-version')">⤓ Importar de Extend</button>
-        <button class="btn-suave" type="button" onclick="exportarJson(construirEsquema, 'esquema-extraccion')">⬇ Exportar JSON</button>
-        <button class="btn-texto" type="button" onclick="alternarJson()">{ } Ver JSON</button>
+        <button class="btn-suave" type="button" onclick="importarEsquema('pr-pid','pr-version')">Importar de Extend</button>
+        <button class="btn-suave" type="button" onclick="exportarJson(construirEsquema, 'esquema-extraccion')">Exportar JSON</button>
+        <button class="btn-texto" type="button" onclick="alternarJson()">{ } Ver JSON generado</button>
       </div>
-      <pre id="sb-json" class="oculto"
-           style="background:var(--md-surface-container);border-radius:var(--md-radio-s);padding:12px;font-size:.78rem;overflow:auto"></pre>
+      <pre id="sb-json" class="oculto json-preview"></pre>
     </div>
 
     <!-- Opciones de parse (solo operación 'parse'/OCR). -->
-    <div id="parse-seccion">
-      <label for="pr-target">Formato de salida del OCR (target)</label>
-      <select id="pr-target">
-        <option value="markdown">markdown</option>
-        <option value="text">text</option>
-      </select>
+    <div id="parse-seccion" class="seccion-modal">
+      <div class="seccion-modal-titulo">Formato de salida del OCR</div>
+      <div style="max-width:280px">
+        <label for="pr-target">Formato de salida</label>
+        <select id="pr-target">
+          <option value="markdown">markdown — con estructura de titulos y tablas</option>
+          <option value="text">text — texto plano sin formato</option>
+        </select>
+      </div>
     </div>
 
     <div class="modal-acciones">
       <button class="btn-texto" onclick="cerrarModal('modal-proc')">Cancelar</button>
-      <button class="btn-principal" onclick="guardarProc()">💾 Guardar</button>
+      <button class="btn-principal" onclick="guardarProc()">Guardar procesador</button>
     </div>
   </div>
 </div>
 {% endblock %}
 
 {% block js %}
+<style>
+/* ---- Secciones dentro del modal de procesadores ---- */
+.seccion-modal {
+  margin-top: 20px;
+  border-top: 1px solid var(--md-outline-variant);
+  padding-top: 14px;
+}
+.seccion-modal:first-of-type {
+  border-top: none;
+  padding-top: 0;
+  margin-top: 10px;
+}
+.seccion-modal-titulo {
+  font-size: .72rem;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--md-on-surface-variant);
+  margin-bottom: 10px;
+}
+
+/* ---- Texto de ayuda bajo campos ---- */
+.campo-ayuda {
+  display: block;
+  font-size: .72rem;
+  color: var(--md-on-surface-variant);
+  margin-top: 4px;
+  line-height: 1.4;
+}
+.campo-ayuda-error {
+  color: var(--md-error);
+}
+
+/* ---- Bloques de nota ---- */
+.nota-info {
+  background: var(--md-surface-container);
+  border-left: 3px solid var(--md-outline);
+  border-radius: 0 var(--md-radio-xs) var(--md-radio-xs) 0;
+  padding: 10px 14px;
+  font-size: .82rem;
+  color: var(--md-on-surface-variant);
+  margin-top: 10px;
+}
+.nota-advertencia {
+  background: var(--md-surface-container);
+  border: 1px solid var(--md-outline-variant);
+  border-radius: var(--md-radio-s);
+  padding: 12px 14px;
+}
+.nota-fila {
+  display: flex;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 4px;
+}
+.label-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: .875rem;
+  font-weight: 400;
+  color: var(--md-on-surface);
+  cursor: pointer;
+  margin: 0;
+}
+.label-check input[type=checkbox] {
+  width: auto;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+/* ---- JSON preview (solo lectura) ---- */
+.json-preview {
+  background: var(--md-surface-container);
+  border-radius: var(--md-radio-s);
+  padding: 12px;
+  font-size: .78rem;
+  overflow: auto;
+  font-family: Consolas, monospace;
+  max-height: 280px;
+  margin-top: 10px;
+  white-space: pre;
+}
+
+/* ---- Encabezados de grupo por ruta ---- */
+.grupo-ruta-header td {
+  background: var(--md-surface-container);
+  padding: 10px 14px 8px;
+  border-top: 2px solid var(--md-outline-variant);
+}
+.grupo-ruta-header:first-child td {
+  border-top: none;
+}
+.grupo-ruta-titulo {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.grupo-ruta-titulo b {
+  font-size: .95rem;
+  color: var(--md-on-surface);
+  letter-spacing: .01em;
+}
+.grupo-ruta-titulo .sub {
+  font-size: .78rem;
+  color: var(--md-on-surface-variant);
+}
+.grupo-ruta-badge {
+  font-size: .72rem;
+  color: var(--md-on-surface-variant);
+  background: var(--md-surface-container-high);
+  border-radius: 100px;
+  padding: 1px 8px;
+  margin-left: auto;
+}
+
+/* ---- Chips de modo en la tabla principal ---- */
+.etiqueta.modo-id    { background: var(--md-primary-container); color: var(--md-on-primary-container); }
+.etiqueta.modo-inline { background: var(--md-secondary-container); color: var(--md-on-secondary-container); }
+
+/* ---- Columna Operación con color ---- */
+.etiqueta.op-clasificar { background: var(--md-secondary-container); color: var(--md-on-secondary-container); }
+.etiqueta.op-extraer    { background: var(--md-primary-container);   color: var(--md-on-primary-container); }
+.etiqueta.op-parse      { background: var(--md-surface-container-high); color: var(--md-on-surface-variant); }
+</style>
+
 <script>
 const API_PROCESADORES = "/api/v1/procesadores/";
 const API_RUTAS = "/api/v1/rutas/";
@@ -190,37 +370,113 @@ async function cargarDatos() {
   return true;
 }
 
+function _filaProc(p) {
+  let procesador;
+  if (p.modo === "id") {
+    const pid = escapar(p.procesador_id || "—");
+    const ver = p.version ? `<span class="sub">versión ${escapar(p.version)}</span>`
+                           : `<span class="sub">última versión</span>`;
+    procesador = `${pid}${ver}`;
+  } else if (p.operacion === "extraer") {
+    const nCampos = p.esquema && p.esquema.properties
+      ? Object.keys(p.esquema.properties).length : 0;
+    procesador = `<span class="sub">inline · ${nCampos} campo${nCampos !== 1 ? "s" : ""}</span>`;
+  } else if (p.operacion === "clasificar") {
+    const nClasifs = p.esquema && p.esquema.classifications
+      ? p.esquema.classifications.length : 0;
+    procesador = nClasifs
+      ? `<span class="sub">inline · ${nClasifs} clasificación${nClasifs !== 1 ? "es" : ""}</span>`
+      : `<span class="sub">inline · prompts globales</span>`;
+  } else {
+    const target = (p.esquema && p.esquema.target) || "markdown";
+    procesador = `<span class="sub">target: ${escapar(target)}</span>`;
+  }
+  const chipModo = p.modo === "id"
+    ? `<span class="etiqueta modo-id">publicado</span>`
+    : `<span class="etiqueta modo-inline">inline</span>`;
+  const chipOp = {
+    clasificar: `<span class="etiqueta op-clasificar">clasificar</span>`,
+    extraer:    `<span class="etiqueta op-extraer">extraer</span>`,
+    parse:      `<span class="etiqueta op-parse">parse</span>`,
+  }[p.operacion] || escapar(p.operacion);
+
+  return `
+  <tr class="fila-proc ${p.activo ? "" : "inactivo"}" data-grupo="${escapar(p.ruta)}">
+    <td>${chipOp}</td>
+    <td>${p.clase ? `<code style="font-size:.8rem">${escapar(p.clase)}</code>` : '<span style="color:var(--md-on-surface-variant)">—</span>'}</td>
+    <td>${chipModo}</td>
+    <td>${procesador}</td>
+    <td>${p.umbral != null ? p.umbral : '<span style="color:var(--md-on-surface-variant)">—</span>'}</td>
+    <td><span class="etiqueta ${p.activo ? "activo" : "revocado"}">${p.activo ? "ACTIVO" : "INACTIVO"}</span></td>
+    <td class="celda-acciones">
+      <button class="btn-icono" title="Editar configuración" onclick="abrirEditarProc(${p.id})">Editar</button>
+      <button class="btn-icono" title="${p.activo ? "Desactivar" : "Activar"}" onclick="alternarProc(${p.id}, ${p.activo ? "false" : "true"})">
+        ${p.activo ? "Pausa" : "Activar"}
+      </button>
+      <button class="btn-icono peligro" title="Eliminar procesador" onclick="eliminarProc(${p.id})">Eliminar</button>
+    </td>
+  </tr>`;
+}
+
 function renderizarProcs(items) {
   PROCS = {};
   const $cuerpo = $("#p-cuerpo");
   if (!items.length) {
-    $cuerpo.html('<tr><td colspan="8" class="sin-datos">No hay procesadores registrados.</td></tr>');
+    $cuerpo.html('<tr><td colspan="7" class="sin-datos">No hay procesadores registrados.</td></tr>');
     return;
   }
-  $cuerpo.html(items.map(p => {
+
+  // Agrupa por ruta manteniendo el orden de aparición.
+  const grupos = {};
+  const ordenRutas = [];
+  items.forEach(p => {
     PROCS[p.id] = p;
-    const procesador = p.modo === "id"
-      ? `${escapar(p.procesador_id || "—")}${p.version ? ` <span class="sub">versión ${escapar(p.version)}</span>` : ` <span class="sub">última versión</span>`}`
-      : `<span class="sub">config inline${p.operacion === "extraer" ? " (esquema)" : ""}</span>`;
+    if (!grupos[p.ruta]) { grupos[p.ruta] = []; ordenRutas.push(p.ruta); }
+    grupos[p.ruta].push(p);
+  });
+
+  const html = ordenRutas.map(ruta => {
+    const procs = grupos[ruta];
+    const url = RUTAS[ruta] || "";
+    const nActivos = procs.filter(p => p.activo).length;
+    const resumen = `${procs.length} procesador${procs.length !== 1 ? "es" : ""}` +
+                    (nActivos < procs.length ? `, ${procs.length - nActivos} inactivo${procs.length - nActivos !== 1 ? "s" : ""}` : "");
     return `
-    <tr class="${p.activo ? "" : "inactivo"}">
-      <td><b>${escapar(p.ruta)}</b><span class="sub">${escapar(RUTAS[p.ruta] || "")}</span></td>
-      <td>${escapar(p.operacion)}</td>
-      <td>${p.clase ? escapar(p.clase) : "—"}</td>
-      <td><span class="etiqueta tipo">${escapar(p.modo)}</span></td>
-      <td>${procesador}</td>
-      <td>${p.umbral ?? "—"}</td>
-      <td><span class="etiqueta ${p.activo ? "activo" : "revocado"}">${p.activo ? "ACTIVO" : "INACTIVO"}</span></td>
-      <td class="celda-acciones">
-        <button class="btn-icono" onclick="abrirEditarProc(${p.id})">✏️ Editar</button>
-        <button class="btn-icono" onclick="alternarProc(${p.id}, ${p.activo ? "false" : "true"})">
-          ${p.activo ? "⏸️" : "▶️"}
-        </button>
-        <button class="btn-icono peligro" onclick="eliminarProc(${p.id})">🗑️</button>
+    <tr class="grupo-ruta-header" data-grupo-header="${escapar(ruta)}">
+      <td colspan="7">
+        <div class="grupo-ruta-titulo">
+          <b>${escapar(ruta)}</b>
+          ${url ? `<span class="sub">${escapar(url)}</span>` : ""}
+          <span class="grupo-ruta-badge">${resumen}</span>
+        </div>
       </td>
-    </tr>`;
-  }).join(""));
-  filtrarTabla("p-buscar", "p-cuerpo");
+    </tr>
+    ${procs.map(_filaProc).join("")}`;
+  }).join("");
+
+  $cuerpo.html(html);
+  filtrarProcs();
+}
+
+// Filtra filas de procesadores y oculta el encabezado de grupo si todos sus
+// procesadores quedan ocultos por el texto de búsqueda.
+function filtrarProcs() {
+  const q = $("#p-buscar").val().toLowerCase();
+  // Primero aplica el filtro a las filas de datos.
+  $("#p-cuerpo .fila-proc").each(function () {
+    $(this).toggle(!q || $(this).text().toLowerCase().includes(q));
+  });
+  // Luego sincroniza los encabezados de grupo.
+  $("#p-cuerpo .grupo-ruta-header").each(function () {
+    const grupo = $(this).data("grupo-header");
+    const hayVisibles = $(`#p-cuerpo .fila-proc[data-grupo="${grupo}"]`).filter(":visible").length > 0;
+    // Si hay búsqueda y la ruta coincide directamente, también mostrar el encabezado.
+    const rutaCoincide = q && grupo.toLowerCase().includes(q);
+    $(this).toggle(hayVisibles || !!rutaCoincide);
+    if (rutaCoincide && !hayVisibles) {
+      $(`#p-cuerpo .fila-proc[data-grupo="${grupo}"]`).show();
+    }
+  });
 }
 
 // --- Schema builder: filas de campos -> JSON Schema (y viceversa) ---
@@ -234,20 +490,20 @@ const TIPOS_SB = { string: "Texto", number: "Número", date: "Fecha", boolean: "
 function renderCampos() {
   const $c = $("#sb-cuerpo");
   if (!CAMPOS.length) {
-    $c.html('<tr><td colspan="4" class="sin-datos">Sin campos: añade el primero.</td></tr>');
+    $c.html('<tr><td colspan="4" class="sin-datos">Sin campos. Añade el primero con el botón de abajo.</td></tr>');
     return;
   }
   $c.html(CAMPOS.map((c, i) => {
     const opciones = Object.entries(TIPOS_SB).map(([v, t]) =>
       `<option value="${v}" ${c.tipo === v ? "selected" : ""}>${t}</option>`).join("");
     const sel = c.tipo === "avanzado"
-      ? `<select class="sb-tipo" disabled><option value="avanzado" selected>Avanzado</option></select>`
+      ? `<select class="sb-tipo" disabled><option value="avanzado" selected>Avanzado (importado)</option></select>`
       : `<select class="sb-tipo">${opciones}</select>`;
     return `<tr>
-      <td><input type="text" class="sb-clave" value="${escapar(c.clave)}" placeholder="numero_cedula"></td>
+      <td><input type="text" class="sb-clave" value="${escapar(c.clave)}" placeholder="ej: numero_cedula"></td>
       <td>${sel}</td>
-      <td><textarea class="sb-desc tabla-textarea" placeholder="Cómo reconocer este campo (todo el contexto que necesite el modelo; admite varias líneas)">${escapar(c.descripcion)}</textarea></td>
-      <td class="celda-acciones"><button class="btn-icono peligro" type="button" onclick="quitarCampo(${i})">🗑️</button></td>
+      <td><textarea class="sb-desc tabla-textarea" placeholder="Explica dónde aparece este dato en el documento, su formato y ejemplos.">${escapar(c.descripcion)}</textarea></td>
+      <td class="celda-acciones"><button class="btn-icono peligro" type="button" title="Quitar este campo" onclick="quitarCampo(${i})">Quitar</button></td>
     </tr>`;
   }).join(""));
 }
@@ -340,15 +596,15 @@ let CLASIFS = [];
 function renderClasifs() {
   const $c = $("#cb-cuerpo");
   if (!CLASIFS.length) {
-    $c.html('<tr><td colspan="4" class="sin-datos">Sin clasificaciones propias: esta ruta usará los prompts globales.</td></tr>');
+    $c.html('<tr><td colspan="4" class="sin-datos">Sin clasificaciones propias. Esta ruta usará los prompts globales.</td></tr>');
     return;
   }
   $c.html(CLASIFS.map((c, i) => `
     <tr>
-      <td><input type="text" class="cb-clave" value="${escapar(c.clave)}" placeholder="cedula"></td>
-      <td><input type="text" class="cb-tipo" value="${escapar(c.tipo)}" placeholder="CEDULA (u 'other')"></td>
-      <td><textarea class="cb-desc tabla-textarea" placeholder="Describe el documento con detalle (todo el contexto que guía al modelo; admite varias líneas)">${escapar(c.descripcion)}</textarea></td>
-      <td class="celda-acciones"><button class="btn-icono peligro" type="button" onclick="quitarClasif(${i})">🗑️</button></td>
+      <td><input type="text" class="cb-clave" value="${escapar(c.clave)}" placeholder="ej: cedula"></td>
+      <td><input type="text" class="cb-tipo" value="${escapar(c.tipo)}" placeholder="ej: CEDULA (o 'other')"></td>
+      <td><textarea class="cb-desc tabla-textarea" placeholder="Describe el documento con detalle. Incluye sus características visuales, campos que contiene, y cómo distinguirlo de otros tipos.">${escapar(c.descripcion)}</textarea></td>
+      <td class="celda-acciones"><button class="btn-icono peligro" type="button" title="Quitar esta clasificación" onclick="quitarClasif(${i})">Quitar</button></td>
     </tr>`).join(""));
 }
 
@@ -462,13 +718,22 @@ function exportarJson(construir, nombre) {
   avisar(`Exportado como ${nombre}.json.`);
 }
 
-// Muestra la sección según la operación: clasificaciones (clasificar),
-// campos de extracción (extraer) o target (parse).
+// Muestra/oculta las secciones según la operación y el modo elegidos.
 function actualizarSecciones() {
   const op = $("#pr-operacion").val();
   $("#clasif-seccion").toggleClass("oculto", op !== "clasificar");
   $("#sb-seccion").toggleClass("oculto", op !== "extraer");
   $("#parse-seccion").toggleClass("oculto", op !== "parse");
+  $("#seccion-umbral").toggleClass("oculto", op !== "clasificar");
+  actualizarModo();
+}
+
+// Muestra/oculta la sección de procesador publicado según el modo.
+function actualizarModo() {
+  const modo = $("#pr-modo").val();
+  const op = $("#pr-operacion").val();
+  const esId = modo === "id" && op !== "parse";
+  $("#seccion-modo-id").toggleClass("oculto", !esId);
 }
 
 // Lee un umbral de confianza y devuelve [ok, valor]. valor es null si está vacío.
@@ -499,7 +764,7 @@ async function cargarExtend(tipo, selProcId, selVerId, inpPidId, silencioso = fa
     avisar((cuerpo && cuerpo.detail) || `No se pudo consultar Extend (HTTP ${status}).`, true);
     return false;
   }
-  $("#" + selProcId).html('<option value="">—</option>' + cuerpo.map(p => {
+  $("#" + selProcId).html('<option value="">— Elige uno —</option>' + cuerpo.map(p => {
     EXTEND_CACHE[p.id] = p;
     return `<option value="${escapar(p.id)}">${escapar(p.nombre || p.id)} (${escapar(p.id)})</option>`;
   }).join(""));
@@ -521,8 +786,8 @@ async function preseleccionarExtend(tipo, pid, version) {
 // ejecutar ('' = última publicada, 'draft' = borrador, o el NÚMERO publicado);
 // data-vid = el id interno de la versión (lo que necesita importar el esquema).
 function opcionesVersionBase() {
-  return '<option value="">última publicada</option>' +
-         '<option value="draft">borrador (draft — cambios sin publicar)</option>';
+  return '<option value="">Última publicada (recomendado)</option>' +
+         '<option value="draft">Borrador — cambios sin publicar aún</option>';
 }
 
 // Al elegir un procesador del select: rellena el id y las versiones disponibles.
@@ -558,12 +823,13 @@ async function importarEsquema(inpPidId, selVerId) {
 
 function _limpiarModalProc() {
   $("#pr-clase, #pr-pid, #pr-umbral").val("");
-  $("#pr-extend").html('<option value="">—</option>');
+  $("#pr-extend").html('<option value="">— Elige uno —</option>');
   $("#pr-version").html(opcionesVersionBase());
   $("#pr-target").val("markdown");
   $("#pr-sync").prop("checked", true);
   $("#pr-publicar").prop("checked", false);
   $("#sb-json, #cb-json").addClass("oculto");
+  $("#identidad-fija-aviso").addClass("oculto");
 }
 
 function abrirCrearProc() {
@@ -591,6 +857,7 @@ function abrirEditarProc(id) {
   $("#pr-ruta").val(p.ruta).prop("disabled", true);
   $("#pr-operacion").val(p.operacion).prop("disabled", true);
   $("#pr-clase").val(p.clase).prop("disabled", true);
+  $("#identidad-fija-aviso").removeClass("oculto");
   $("#pr-modo").val(p.modo);
   $("#pr-pid").val(p.procesador_id || "");
   if (p.version === "draft") {
@@ -679,11 +946,11 @@ async function guardarProc() {
       if (rs.ok) {
         const vPub = rs.cuerpo && rs.cuerpo.version_publicada;
         msg += vPub
-          ? ` Esquema actualizado y PUBLICADO en Extend como v${vPub}.`
+          ? ` Esquema actualizado y publicado en Extend como v${vPub}.`
           : " Esquema actualizado en Extend (versión borrador).";
       } else {
         conError = true;
-        msg += " ⚠ Guardado local OK, pero Extend no se actualizó: " +
+        msg += " Guardado local correcto, pero Extend no se actualizó: " +
                ((rs.cuerpo && rs.cuerpo.detail) || `HTTP ${rs.status}`);
       }
     }
@@ -705,7 +972,7 @@ async function alternarProc(id, activar) {
 }
 
 async function eliminarProc(id) {
-  if (!confirm(`¿Eliminar el procesador #${id}? Si solo quieres dejar de usarlo, mejor desactívalo.`)) return;
+  if (!confirm(`¿Eliminar el procesador #${id}? Si solo quieres dejarlo de usar temporalmente, es mejor desactivarlo.`)) return;
   const { status, ok, cuerpo } = await llamar(API_PROCESADORES + id, { method: "DELETE" });
   if (ok) { avisar(`Procesador #${id} eliminado.`); cargarDatos(); return; }
   if (sesionInvalida(status)) return;
@@ -715,5 +982,6 @@ async function eliminarProc(id) {
 // Al cambiar la operación en el modal, se muestra la sección que corresponde
 // (builder para extraer, target para parse, nada para clasificar).
 $("#pr-operacion").on("change", actualizarSecciones);
+$("#pr-modo").on("change", actualizarModo);
 </script>
 {% endblock %}

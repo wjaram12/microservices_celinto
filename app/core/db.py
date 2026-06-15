@@ -8,6 +8,10 @@ creación idempotente de su tabla — a prueba de carreras entre workers.
 Las conexiones salen de un POOL compartido por todo el proceso
 (psycopg2.pool.ThreadedConnectionPool): bajo concurrencia (varios sistemas
 consumidores) se reutilizan en vez de abrir/cerrar una por operación.
+
+POOL_MIN y POOL_MAX fijan el tamaño del pool POR WORKER; POOL_MAX × nº de
+workers de gunicorn debe quedar por debajo de `max_connections` de PostgreSQL
+(default 100).
 """
 import contextlib
 import threading
@@ -18,8 +22,6 @@ from psycopg2 import pool as pg_pool
 
 from app.core.config import settings
 
-# Tamaño del pool POR WORKER. POOL_MAX * nº de workers de gunicorn debe quedar
-# por debajo de `max_connections` de PostgreSQL (default 100).
 POOL_MIN = 1
 POOL_MAX = 10
 

@@ -16,7 +16,8 @@
                 "8001"
             ],
             "jinja": true,
-            "justMyCode": true
+            "justMyCode": true,
+            "python": "${workspaceFolder}\\.venv\\Scripts\\python.exe"
         }
     ]
 }

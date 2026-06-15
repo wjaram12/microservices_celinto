@@ -50,7 +50,6 @@ def ejecutar_consulta(datos: ConsultaSQL, _admin: dict = Depends(requiere_admin)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except PgError as e:
-        # Es una consola: el admin necesita ver el mensaje de error de PostgreSQL.
         raise HTTPException(status_code=400, detail=str(e).strip())
     except Exception:
         logger.exception("Error inesperado ejecutando SQL en la consola admin")

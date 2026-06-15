@@ -46,9 +46,6 @@ UMBRAL_DEFECTO = 0.85
 
 _TIPO_EXTEND = {"clasificar": "CLASSIFY", "extraer": "EXTRACT"}
 
-# Clave de la caché centralizada para las filas activas (la config que leen los
-# resolutores en cada petición). Se invalida en cada escritura; al ser Redis
-# compartido, los demás workers lo ven al instante.
 CLAVE_CACHE = "procesadores:activas"
 
 OTRO_POR_DEFECTO = {
@@ -127,9 +124,6 @@ _ESQUEMA_SENESCYT = {
     },
 }
 
-# NOTA: esquemas placeholder. Incluyen los campos de identidad
-# (numero_identificacion / nombres_completos) que usa la comparación de identidad
-# de la ruta; reemplazar las propiedades por el JSON Schema real cuando esté.
 _ESQUEMA_CARTA_COMPROMISO = {
     "type": "object",
     "properties": {
@@ -544,8 +538,12 @@ SEMILLA = [
     ("ocr", "parse", "", "inline", None, None, {"target": "markdown"}, None),
 ]
 
-_COLUMNAS =("id, ruta, operacion, clase, modo, procesador_id, version, esquema, "
-             "umbral, activo, creado_en, actualizado_en")
+_COLUMNAS = (
+    "p.id, r.clave AS ruta, p.ruta_id, p.operacion, p.clase, p.modo, "
+    "p.procesador_id, p.version, p.esquema, p.umbral, p.activo, "
+    "p.creado_en, p.actualizado_en"
+)
+_FROM = "FROM procesadores p JOIN rutas r ON r.id = p.ruta_id"
 
 
 class ServicioProcesadores(ServicioBD):
@@ -554,7 +552,7 @@ class ServicioProcesadores(ServicioBD):
     DDL = """
         CREATE TABLE IF NOT EXISTS procesadores (
             id             SERIAL PRIMARY KEY,
-            ruta           TEXT NOT NULL DEFAULT '',
+            ruta_id        INTEGER NOT NULL REFERENCES rutas(id) ON DELETE RESTRICT,
             operacion      TEXT NOT NULL,
             clase          TEXT NOT NULL DEFAULT '',
             modo           TEXT NOT NULL DEFAULT 'inline',
@@ -565,9 +563,10 @@ class ServicioProcesadores(ServicioBD):
             activo         BOOLEAN NOT NULL DEFAULT TRUE,
             creado_en      TIMESTAMP NOT NULL DEFAULT now(),
             actualizado_en TIMESTAMP NOT NULL DEFAULT now(),
-            UNIQUE (ruta, operacion, clase)
+            UNIQUE (ruta_id, operacion, clase)
         )
     """
+
     @staticmethod
     def _normalizar(fila: Optional[dict]) -> Optional[dict]:
         if fila is None:
@@ -599,16 +598,21 @@ class ServicioProcesadores(ServicioBD):
     def normalizar_modo(modo: str) -> str:
         return (modo or "").strip().lower()
 
-    @staticmethod
-    def _validar(ruta: str, operacion: str, modo: str,
-                 procesador_id: Optional[str], esquema) -> None:
-        registradas = rutas.claves_activas()
-        if ruta not in registradas:
+    def _resolver_ruta_id(self, ruta: str) -> int:
+        """Valida que la ruta exista y esté activa; devuelve su id para la FK."""
+        fila = rutas.obtener(ruta)
+        if fila is None or not fila["activo"]:
+            registradas = rutas.claves_activas()
             raise ValueError(
                 f"Ruta '{ruta}' no registrada o inactiva. Rutas disponibles: "
                 f"{', '.join(sorted(registradas)) or '(ninguna)'}. "
                 "Regístrala primero en /admin/rutas."
             )
+        return fila["id"]
+
+    @staticmethod
+    def _validar(operacion: str, modo: str,
+                 procesador_id: Optional[str], esquema) -> None:
         if operacion not in OPERACIONES_VALIDAS:
             raise ValueError(
                 f"Operación inválida '{operacion}'. Debe ser una de: "
@@ -642,8 +646,9 @@ class ServicioProcesadores(ServicioBD):
                     cur.execute("SELECT COUNT(*) FROM procesadores")
                     if cur.fetchone()[0] == 0:
                         cur.executemany(
-                            "INSERT INTO procesadores (ruta, operacion, clase, modo, procesador_id, version, esquema, umbral) "
-                            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                            "INSERT INTO procesadores "
+                            "(ruta_id, operacion, clase, modo, procesador_id, version, esquema, umbral) "
+                            "VALUES ((SELECT id FROM rutas WHERE clave = %s), %s, %s, %s, %s, %s, %s, %s)",
                             [(ru, op, cl, mo, pid, ver, Json(esq) if esq is not None else None, umb)
                              for (ru, op, cl, mo, pid, ver, esq, umb) in SEMILLA],
                         )
@@ -652,10 +657,10 @@ class ServicioProcesadores(ServicioBD):
         cache.invalidar(CLAVE_CACHE)
 
     def listar(self, solo_activos: bool = False) -> list:
-        sql = f"SELECT {_COLUMNAS} FROM procesadores"
+        sql = f"SELECT {_COLUMNAS} {_FROM}"
         if solo_activos:
-            sql += " WHERE activo = TRUE"
-        sql += " ORDER BY ruta, operacion, clase"
+            sql += " WHERE p.activo = TRUE"
+        sql += " ORDER BY r.clave, p.operacion, p.clase"
         with self._conectar() as con:
             with con.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute(sql)
@@ -664,7 +669,7 @@ class ServicioProcesadores(ServicioBD):
     def obtener_por_id(self, id_proc: int) -> Optional[dict]:
         with self._conectar() as con:
             with con.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute(f"SELECT {_COLUMNAS} FROM procesadores WHERE id = %s", (id_proc,))
+                cur.execute(f"SELECT {_COLUMNAS} {_FROM} WHERE p.id = %s", (id_proc,))
                 return self._normalizar(cur.fetchone())
 
     def crear(self, ruta: str, operacion: str, clase: str, modo: str,
@@ -680,19 +685,21 @@ class ServicioProcesadores(ServicioBD):
         modo = self.normalizar_modo(modo)
         procesador_id = (procesador_id or "").strip() or None
         version = (version or "").strip() or None
-        self._validar(ruta, operacion, modo, procesador_id, esquema)
+        ruta_id = self._resolver_ruta_id(ruta)
+        self._validar(operacion, modo, procesador_id, esquema)
         self._validar_umbral(umbral)
         with self._conectar() as con:
-            with con.cursor(cursor_factory=RealDictCursor) as cur:
+            with con.cursor() as cur:
                 cur.execute(
-                    "INSERT INTO procesadores (ruta, operacion, clase, modo, procesador_id, version, esquema, umbral, activo) "
-                    f"VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING {_COLUMNAS}",
-                    (ruta, operacion, clase, modo, procesador_id, version,
+                    "INSERT INTO procesadores "
+                    "(ruta_id, operacion, clase, modo, procesador_id, version, esquema, umbral, activo) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+                    (ruta_id, operacion, clase, modo, procesador_id, version,
                      Json(esquema) if esquema is not None else None, umbral, bool(activo)),
                 )
-                fila = self._normalizar(cur.fetchone())
+                nuevo_id = cur.fetchone()[0]
         cache.invalidar(CLAVE_CACHE)
-        return fila
+        return self.obtener_por_id(nuevo_id)
 
     def actualizar(self, id_proc: int,
                    ruta: Optional[str] = None,
@@ -719,7 +726,12 @@ class ServicioProcesadores(ServicioBD):
         if actual is None:
             return None
 
-        n_ruta = self.normalizar_ruta(ruta) if ruta is not None else actual["ruta"]
+        if ruta is not None:
+            n_ruta = self.normalizar_ruta(ruta)
+            n_ruta_id = self._resolver_ruta_id(n_ruta)
+        else:
+            n_ruta = actual["ruta"]
+            n_ruta_id = actual["ruta_id"]
         n_operacion = self.normalizar_operacion(operacion) if operacion is not None else actual["operacion"]
         n_clase = self.normalizar_clase(clase) if clase is not None else actual["clase"]
         n_modo = self.normalizar_modo(modo) if modo is not None else actual["modo"]
@@ -737,16 +749,16 @@ class ServicioProcesadores(ServicioBD):
             n_umbral = umbral
         n_activo = actual["activo"] if activo is None else bool(activo)
 
-        self._validar(n_ruta, n_operacion, n_modo, n_procesador, n_esquema)
+        self._validar(n_operacion, n_modo, n_procesador, n_esquema)
         self._validar_umbral(n_umbral)
 
         with self._conectar() as con:
             with con.cursor() as cur:
                 cur.execute(
-                    "UPDATE procesadores SET ruta = %s, operacion = %s, clase = %s, modo = %s, "
+                    "UPDATE procesadores SET ruta_id = %s, operacion = %s, clase = %s, modo = %s, "
                     "procesador_id = %s, version = %s, esquema = %s, umbral = %s, activo = %s, "
                     "actualizado_en = now() WHERE id = %s",
-                    (n_ruta, n_operacion, n_clase, n_modo, n_procesador, n_version,
+                    (n_ruta_id, n_operacion, n_clase, n_modo, n_procesador, n_version,
                      Json(n_esquema) if n_esquema is not None else None, n_umbral, n_activo, id_proc),
                 )
         cache.invalidar(CLAVE_CACHE)

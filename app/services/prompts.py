@@ -22,7 +22,6 @@ from psycopg2.extras import RealDictCursor
 from app.core.cache import cache
 from app.core.db import ServicioBD
 
-# Clave de la caché centralizada (Redis) para las clasificaciones activas.
 CLAVE_CACHE = "prompts:activas"
 
 SEMILLA = [

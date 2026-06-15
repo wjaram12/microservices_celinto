@@ -12,7 +12,6 @@ from typing import Any
 
 from app.core.db import ServicioBD
 
-# Tope de filas que se devuelven a la UI, para no traer tablas enteras al panel.
 LIMITE_FILAS = 500
 
 
@@ -32,7 +31,7 @@ class ServicioConsultas(ServicioBD):
 
     def __init__(self):
         super().__init__()
-        self._tabla_lista = True  # sin tabla propia: evita el DDL de ServicioBD
+        self._tabla_lista = True
 
     def ejecutar(self, sql: str) -> dict:
         """

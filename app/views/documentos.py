@@ -19,9 +19,6 @@ from app.services.errores import ErrorDeArchivo, ErrorDeProveedor, ErrorDeValida
 
 logger = logging.getLogger(__name__)
 
-# Etiqueta legible por clase para los mensajes de validar-registro-senescyt
-# (la ruta acepta tres tipos de documento). El artículo va incluido para que
-# encaje en "corresponde a {etiqueta}" / "Es {etiqueta}".
 ETIQUETAS_SENESCYT = {
     "REGISTRO_SENESCYT": "un registro de título de la SENESCYT",
     "CARTA_COMPROMISO": "una carta de compromiso de subida de título",
@@ -102,7 +99,7 @@ async def extraer_texto(
 
 
 @api.post("/validaciones/validar-identidad/", response_model=RespuestaValidacion, tags=["Validadores"])
-async def validar_documento(
+async def validar_documento(    
     file: UploadFile = File(...),
     cedula_sistema: Optional[str] = Form(
         None,
@@ -214,8 +211,6 @@ async def validar_registro_senescyt(
         mensaje = (f"Es {etiqueta}, pero " + " y ".join(difieren) +
                    " no coincide(n) con los datos proporcionados.")
     elif identidad_solicitada:
-        # match_document None pese a haberse enviado datos: el documento no traía
-        # los campos para contrastar la identidad.
         mensaje = (f"Documento reconocido como {etiqueta}, pero no se pudo leer del documento "
                    "la información para verificar la identidad.")
     else:
