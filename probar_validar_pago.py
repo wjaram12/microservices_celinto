@@ -24,8 +24,8 @@ import requests
 # --- Valores quemados ---------------------------------------------------------
 BASE_URL = "http://136.119.71.131:8000"
 ENDPOINT = "/api/v1/validaciones/validar-registro-senescyt/"
-API_KEY = "wsk_vNmPHQCFGPANghQQ5N5DXfqwtSOKE1_Zmo3RRibBQz4"
-IMAGEN_POR_DEFECTO = r"C:\Users\HP\Downloads\requisitopgrado_2026521231458.pdf"
+API_KEY = "wsk_DCBAyZQjn2R5JX-2fI6lEWo3tZHz9tFOAo-JsU9l_ws"
+IMAGEN_POR_DEFECTO = r"C:\Users\HP\Downloads\senescyt_0942112129.pdf"
 # ------------------------------------------------------------------------------
 
 try:

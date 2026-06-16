@@ -246,22 +246,42 @@ class ClienteExtend:
 
     async def extraer(self, file_id: str, fragmento: dict) -> Tuple[dict, dict]:
         """
-        POST /extract con el fragmento de configuración (processor publicado o
-        schema inline). Devuelve (valores, confianzas):
+        Extracción estructurada. El endpoint depende del fragmento:
+          - Extractor PUBLICADO ({"processorId": "ex_...", ["version"]}): se ejecuta
+            con POST /processor_runs (sync), el ÚNICO endpoint que respeta el
+            esquema publicado del procesador. POST /extract es zero-shot e ignora
+            cualquier referencia a procesador (autoextrae un esquema en inglés).
+          - Esquema INLINE ({"config": {"schema": ...}}): POST /extract con ese
+            schema, que sí se respeta.
+        Devuelve (valores, confianzas):
           - valores: output.value (los campos extraídos).
           - confianzas: {campo: confianza 0..1} desde output.metadata, con la
             misma notación de Extend para anidados (p.ej. 'monto.amount'); la
             confianza es None cuando Extend no la reporta para ese campo.
         """
-        cuerpo = {"file": {"id": file_id}, **fragmento}
-        datos = await self._llamar("POST", "/extract", json=cuerpo)
-        if datos.get("status") != "PROCESSED":
-            logger.error(
-                "Extract no completado (status=%s, failureReason=%s)",
-                datos.get("status"), datos.get("failureReason"),
-            )
-            raise ErrorDeProveedor("La extracción de campos no se completó.")
-        output = datos.get("output") or {}
+        if fragmento.get("processorId"):
+            # processor_runs usa file.fileId (camelCase) y devuelve la corrida
+            # envuelta en 'processorRun'; sync=true para respuesta inmediata.
+            cuerpo = {"file": {"fileId": file_id}, "sync": True, **fragmento}
+            datos = await self._llamar("POST", "/processor_runs", json=cuerpo)
+            corrida = datos.get("processorRun") or {}
+            if corrida.get("status") != "PROCESSED":
+                logger.error(
+                    "Extract (processor_run) no completado (status=%s, failureReason=%s)",
+                    corrida.get("status"), corrida.get("failureReason"),
+                )
+                raise ErrorDeProveedor("La extracción de campos no se completó.")
+            output = corrida.get("output") or {}
+        else:
+            cuerpo = {"file": {"id": file_id}, **fragmento}
+            datos = await self._llamar("POST", "/extract", json=cuerpo)
+            if datos.get("status") != "PROCESSED":
+                logger.error(
+                    "Extract no completado (status=%s, failureReason=%s)",
+                    datos.get("status"), datos.get("failureReason"),
+                )
+                raise ErrorDeProveedor("La extracción de campos no se completó.")
+            output = datos.get("output") or {}
         return output.get("value") or {}, self._confianzas_por_campo(output.get("metadata"))
 
     async def listar_procesadores(self, tipo_extend: str) -> list:

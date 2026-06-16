@@ -880,7 +880,14 @@ class ServicioProcesadores(ServicioBD):
         if not fila:
             return None
         if fila["modo"] == "id" and fila["procesador_id"]:
-            return {"processor": self._ref_procesador(fila)}
+            # Un extractor PUBLICADO se ejecuta con POST /processor_runs, que SÍ
+            # respeta su esquema. (POST /extract es zero-shot e ignora cualquier
+            # referencia a procesador: autoextrae.) processorId va top-level y la
+            # versión es opcional (sin ella usa la última publicada).
+            ref = {"processorId": fila["procesador_id"]}
+            if fila.get("version"):
+                ref["version"] = fila["version"]
+            return ref
         if fila["modo"] == "inline" and fila["esquema"]:
             return {"config": {"schema": fila["esquema"]}}
         return None
