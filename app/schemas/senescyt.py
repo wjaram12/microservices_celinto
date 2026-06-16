@@ -31,3 +31,9 @@ class RespuestaRegistroSenescyt(BaseModel):
     document_class: str
     confidence: float
     datos: dict = {}
+    confianzas: dict = Field(
+        default={},
+        description=("Índice de confianza 0..1 por cada campo extraído, con la misma "
+                     "clave que en `datos`; los campos anidados usan notación con punto "
+                     "(p.ej. 'monto.amount'). El valor es null si Extend no reporta "
+                     "confianza para ese campo. Vacío si no hubo extracción."))

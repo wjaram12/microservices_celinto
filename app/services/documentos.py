@@ -362,15 +362,16 @@ class ServicioDocumentos:
         clase, confianza = await extend.clasificar(file_id, fragmento)
         return clase, confianza, umbral
 
-    async def _extraer_datos(self, ruta: str, clase: str, file_id: str) -> dict:
+    async def _extraer_datos(self, ruta: str, clase: str, file_id: str) -> Tuple[dict, dict]:
         """
-        Extracción estructurada según la clase. Devuelve {} para clases sin
-        procesador ni esquema (no es un documento de identidad reconocido en
-        esa ruta).
+        Extracción estructurada según la clase. Devuelve (datos, confianzas);
+        ({}, {}) para clases sin procesador ni esquema (no es un documento
+        reconocido en esa ruta). `confianzas` mapea cada campo extraído a su
+        índice de confianza 0..1 (o None si Extend no lo reporta).
         """
         fragmento = await _config_en_hilo(procesadores.cuerpo_extraccion, ruta, clase)
         if fragmento is None:
-            return {}
+            return {}, {}
         return await extend.extraer(file_id, fragmento)
 
     async def _extraer_texto(self, file_id: str, ruta: str) -> str:
@@ -432,9 +433,9 @@ class ServicioDocumentos:
         es_cedula = clase == ClaseDocumento.CEDULA and confianza >= umbral
         es_identidad = clase in TIPOS_IDENTIDAD and confianza >= umbral
 
-        datos = {}
+        datos, confianzas = {}, {}
         if es_identidad:
-            datos = await self._extraer_datos(RutaAPI.VALIDAR, clase, file_id)
+            datos, confianzas = await self._extraer_datos(RutaAPI.VALIDAR, clase, file_id)
 
         resultado = {
             "clase_detectada": clase,
@@ -443,6 +444,7 @@ class ServicioDocumentos:
             "es_identidad": es_identidad,
             "status": estado_validacion(es_identidad, datos),
             "datos": datos,
+            "confianzas": confianzas,
             "identificacion_sistema": None,
             "identificacion_documento": None,
             "coincide": None,
@@ -505,9 +507,9 @@ class ServicioDocumentos:
 
         existe_clase = clase in TIPOS_SENESCYT and confianza >= umbral
 
-        datos = {}
+        datos, confianzas = {}, {}
         if existe_clase:
-            datos = await self._extraer_datos(RutaAPI.SENESCYT, clase, file_id)
+            datos, confianzas = await self._extraer_datos(RutaAPI.SENESCYT, clase, file_id)
 
         coincide_identificacion = comparar_campo(
             numero_identificacion, valor_en_datos(datos, _CLAVES_NUMERO),
@@ -526,6 +528,7 @@ class ServicioDocumentos:
             "coincide_identificacion": coincide_identificacion,
             "coincide_nombres": coincide_nombres,
             "datos": datos,
+            "confianzas": confianzas,
         }
 
     async def validar_pago(self, contenido: bytes, mime_type: str, nombre: str = "") -> dict:
@@ -546,9 +549,9 @@ class ServicioDocumentos:
 
         es_pago = clase in TIPOS_PAGO and confianza >= umbral
 
-        datos = {}
+        datos, confianzas = {}, {}
         if es_pago:
-            datos = await self._extraer_datos(RutaAPI.PAGO, clase, file_id)
+            datos, confianzas = await self._extraer_datos(RutaAPI.PAGO, clase, file_id)
 
         return {
             "clase_detectada": clase,
@@ -556,6 +559,7 @@ class ServicioDocumentos:
             "es_pago": es_pago,
             "status": estado_validacion(es_pago, datos),
             "datos": datos,
+            "confianzas": confianzas,
         }
 
 

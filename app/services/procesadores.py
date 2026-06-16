@@ -28,6 +28,7 @@ El .env sigue guardando SOLO secretos (EXTEND_API_KEY, DATABASE_URL).
 Los resolutores (cuerpo_*) leen de esta tabla en cada petición y devuelven el
 fragmento de body que ServicioDocumentos inyecta en la llamada a Extend.
 """
+import logging
 from typing import Callable, Optional, Tuple
 
 from psycopg2 import errors as pg_errors
@@ -38,6 +39,8 @@ from app.core.db import ServicioBD
 from app.services.errores import ErrorDeValidacion
 from app.services.extend import extend
 from app.services.rutas import rutas
+
+logger = logging.getLogger(__name__)
 
 OPERACIONES_VALIDAS = {"clasificar", "extraer", "parse"}
 MODOS_VALIDOS = {"id", "inline"}
@@ -919,14 +922,16 @@ class ServicioProcesadores(ServicioBD):
             return {"classifications": config["classifications"]}
         return {}
 
-    async def actualizar_en_extend(self, id_proc: int, publicar: bool = False) -> Optional[dict]:
+    async def publicar_config_en_extend(self, id_proc: int,
+                                        esquema: Optional[dict]) -> Optional[dict]:
         """
-        Empuja el esquema GUARDADO de la fila a su procesador publicado en Extend
-        (POST /processors/{id}): el JSON Schema para extractores (EXTRACT) o las
-        clasificaciones para clasificadores (CLASSIFY). Actualiza la versión
-        BORRADOR del procesador; con `publicar=True` además publica el borrador
-        como versión nueva (release minor) — las rutas en 'última publicada' la
-        usan de inmediato. Devuelve None si la fila no existe (-> 404).
+        Empuja la config EDITADA en el modal (no la de la fila) al procesador de
+        Extend asociado y PUBLICA una versión nueva: el JSON Schema para
+        extractores (EXTRACT) o las clasificaciones para clasificadores
+        (CLASSIFY). Actualiza el BORRADOR (POST /processors/{id}) y luego lo
+        publica (release minor) — la ruta en 'última publicada' la usa de
+        inmediato. La config NO se persiste en local: Extend es la fuente de
+        verdad. Devuelve None si la fila no existe (-> 404).
         """
         fila = self.obtener_por_id(id_proc)
         if fila is None:
@@ -937,38 +942,45 @@ class ServicioProcesadores(ServicioBD):
                 "La fila no tiene un procesador de Extend asociado (procesador_id); "
                 "no hay nada que actualizar en Extend."
             )
-        esquema = fila.get("esquema")
         if fila["operacion"] == "clasificar":
             propias = esquema.get("classifications") if isinstance(esquema, dict) else None
             if not propias:
-                raise ErrorDeValidacion(
-                    "La fila no tiene clasificaciones guardadas para enviar a Extend."
-                )
+                raise ErrorDeValidacion("No hay clasificaciones para enviar a Extend.")
             config = {"type": "CLASSIFY",
                       "classifications": _normalizar_clasificaciones(propias)}
         elif fila["operacion"] == "extraer":
             if not esquema:
-                raise ErrorDeValidacion("La fila no tiene esquema guardado para enviar a Extend.")
+                raise ErrorDeValidacion("No hay esquema para enviar a Extend.")
             config = {"type": "EXTRACT", "schema": esquema}
         else:
             raise ErrorDeValidacion(
                 "Solo los clasificadores y extractores existen como procesadores en Extend."
             )
 
-        datos = await extend.actualizar_procesador(pid, config)
-        borrador = ((datos.get("processor") or datos).get("draftVersion") or {})
-        resultado = {
+        await extend.actualizar_procesador(pid, config)
+        try:
+            pub = await extend.publicar_procesador(pid, "minor")
+        except Exception:
+            # El borrador quedó modificado pero sin publicar: estado inconsistente
+            # que conviene poder rastrear por el procesador afectado.
+            logger.exception(
+                "El borrador de %s se actualizó pero la publicación falló; "
+                "quedó un borrador sin publicar en Extend.", pid)
+            raise
+        # El número de versión puede venir anidado ({"version": {"version": "2.1"}}),
+        # plano ({"version": "2.1"}) o como el propio objeto de versión.
+        version = pub.get("version") or pub.get("processorVersion") or pub
+        if isinstance(version, dict):
+            numero = version.get("version")
+        elif isinstance(version, str):
+            numero = version
+        else:
+            numero = None
+        return {
             "procesador_id": pid,
             "operacion": fila["operacion"],
-            "version_borrador": borrador.get("id"),
-            "version_publicada": None,
+            "version_publicada": numero,
         }
-        if publicar:
-            pub = await extend.publicar_procesador(pid, "minor")
-            version = pub.get("version") or pub.get("processorVersion") or pub
-            if isinstance(version, dict):
-                resultado["version_publicada"] = version.get("version")
-        return resultado
 
 
 procesadores = ServicioProcesadores()

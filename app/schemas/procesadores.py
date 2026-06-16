@@ -45,6 +45,13 @@ class ProcesadorRespuesta(BaseModel):
     actualizado_en: str
 
 
+class PublicarConfigExtend(BaseModel):
+    """Config editada en el modal que se empuja al procesador de Extend y se
+    publica. `esquema` es el JSON Schema (extraer) o {'classifications': [...]}
+    (clasificar). No se persiste en local: Extend es la fuente de verdad."""
+    esquema: dict
+
+
 class VersionExtend(BaseModel):
     """Una versión publicada de un procesador en Extend Studio."""
     id: Optional[str] = None

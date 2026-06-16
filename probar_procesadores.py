@@ -669,39 +669,42 @@ clasifs = (r.json() or {}).get("classifications") or []
 check("devuelve la lista classifications del clasificador",
       any(c.get("id") == "cedula_pub" for c in clasifs))
 
-# Empujar el esquema guardado AL procesador publicado (actualiza su borrador).
+# Empujar la config EDITADA (en el body) al procesador publicado y PUBLICAR
+# siempre una versión nueva. La config NO se persiste en local: Extend es la
+# fuente de verdad, por eso va en el body y no se lee de la fila.
 cliente.put(f"/api/v1/procesadores/{id_cl}",
-            json={"esquema": propias, "modo": "id", "procesador_id": "cl_sync1"}, headers=A)
-r = cliente.post(f"/api/v1/procesadores/{id_cl}/extend", headers=A)
-check("actualizar clasificador en Extend -> 200", r.status_code == 200, r.text[:200])
+            json={"esquema": None, "modo": "id", "procesador_id": "cl_sync1"}, headers=A)
+r = cliente.post(f"/api/v1/procesadores/{id_cl}/extend", json={"esquema": propias}, headers=A)
+check("publicar clasificador en Extend -> 200", r.status_code == 200, r.text[:200])
 b = (CAPTURAS.get("/processors/cl_sync1") or [None])[-1] or {}
-check("se envió config CLASSIFY con las clasificaciones propias",
+check("se envió config CLASSIFY con las clasificaciones del body",
       b.get("config", {}).get("type") == "CLASSIFY"
       and any(c.get("id") == "matricula" for c in b["config"].get("classifications", [])))
 check("el push incluye la clase de descarte 'other'",
       any(c.get("type") == "other" for c in b.get("config", {}).get("classifications", [])))
-check("el push sin publicar NO publica versión",
-      r.json().get("version_publicada") is None)
-
-# Push + autopublicación de la versión (release minor).
-r = cliente.post(f"/api/v1/procesadores/{id_cl}/extend?publicar=true", headers=A)
-check("push + autopublicar -> 200 con la versión nueva",
-      r.status_code == 200 and r.json().get("version_publicada") == "2.1", r.text[:200])
+check("publica siempre una versión nueva (release minor)",
+      r.json().get("version_publicada") == "2.1", r.text[:200])
 pub = (CAPTURAS.get("/processors/cl_sync1/publish") or [None])[-1] or {}
 check("la publicación pidió release minor", pub.get("releaseType") == "minor")
 
+check("publicar sin esquema en el body -> 422",
+      cliente.post(f"/api/v1/procesadores/{id_cl}/extend", headers=A).status_code == 422)
+
 id_ext = id_de(RV, "extraer", "CEDULA")
 cliente.put(f"/api/v1/procesadores/{id_ext}",
-            json={"modo": "id", "procesador_id": "ex_sync9"}, headers=A)
-r = cliente.post(f"/api/v1/procesadores/{id_ext}/extend", headers=A)
-check("actualizar extractor en Extend -> 200", r.status_code == 200, r.text[:200])
+            json={"esquema": None, "modo": "id", "procesador_id": "ex_sync9"}, headers=A)
+ESQUEMA_BODY = {"type": "object", "properties": {
+    "numero_cedula": {"type": ["string", "null"], "description": "Número de cédula."}}}
+r = cliente.post(f"/api/v1/procesadores/{id_ext}/extend", json={"esquema": ESQUEMA_BODY}, headers=A)
+check("publicar extractor en Extend -> 200", r.status_code == 200, r.text[:200])
 b = (CAPTURAS.get("/processors/ex_sync9") or [None])[-1] or {}
-check("se envió config EXTRACT con el JSON Schema",
+check("se envió config EXTRACT con el JSON Schema del body",
       b.get("config", {}).get("type") == "EXTRACT"
       and "numero_cedula" in (b["config"].get("schema", {}).get("properties") or {}))
 
 check("fila sin procesador_id -> 400",
-      cliente.post(f"/api/v1/procesadores/{id_de('ocr', 'parse')}/extend", headers=A).status_code == 400)
+      cliente.post(f"/api/v1/procesadores/{id_de('ocr', 'parse')}/extend",
+                   json={"esquema": {"target": "markdown"}}, headers=A).status_code == 400)
 
 # Restaurar el estado por defecto de las filas tocadas.
 cliente.put(f"/api/v1/procesadores/{id_cl}",

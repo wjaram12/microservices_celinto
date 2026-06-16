@@ -42,6 +42,11 @@ _RED_REINTENTABLE = (
     httpx.RemoteProtocolError,
 )
 
+# Scores de confianza que Extend reporta por campo en output.metadata de /extract,
+# en orden de preferencia: se usa el primero no nulo. Todos vienen en rango 0..1 y
+# cualquiera puede faltar o ser null.
+_SCORES_CONFIANZA = ("ocrConfidence", "reviewAgentScore", "logprobsConfidence")
+
 
 class _FalloTransitorio(Exception):
     """
@@ -217,10 +222,36 @@ class ClienteExtend:
         chunks = (datos.get("output") or {}).get("chunks") or []
         return "\n".join(chunk.get("content", "") for chunk in chunks)
 
-    async def extraer(self, file_id: str, fragmento: dict) -> dict:
+    @staticmethod
+    def _confianzas_por_campo(metadata: Optional[dict]) -> dict:
+        """
+        Aplana el output.metadata de /extract a {campo: confianza 0..1}. Conserva
+        la notación de Extend para campos anidados ('monto.amount', ...) para que
+        cada confianza quede alineada con su campo de output.value. Por cada campo
+        toma el primer score no nulo de _SCORES_CONFIANZA; None si Extend no
+        reporta ninguno.
+        """
+        salida = {}
+        for clave, meta in (metadata or {}).items():
+            if not isinstance(meta, dict):
+                continue
+            confianza = None
+            for score in _SCORES_CONFIANZA:
+                valor = meta.get(score)
+                if valor is not None:
+                    confianza = float(valor)
+                    break
+            salida[clave] = confianza
+        return salida
+
+    async def extraer(self, file_id: str, fragmento: dict) -> Tuple[dict, dict]:
         """
         POST /extract con el fragmento de configuración (processor publicado o
-        schema inline). Devuelve output.value (los campos extraídos).
+        schema inline). Devuelve (valores, confianzas):
+          - valores: output.value (los campos extraídos).
+          - confianzas: {campo: confianza 0..1} desde output.metadata, con la
+            misma notación de Extend para anidados (p.ej. 'monto.amount'); la
+            confianza es None cuando Extend no la reporta para ese campo.
         """
         cuerpo = {"file": {"id": file_id}, **fragmento}
         datos = await self._llamar("POST", "/extract", json=cuerpo)
@@ -230,7 +261,8 @@ class ClienteExtend:
                 datos.get("status"), datos.get("failureReason"),
             )
             raise ErrorDeProveedor("La extracción de campos no se completó.")
-        return (datos.get("output") or {}).get("value") or {}
+        output = datos.get("output") or {}
+        return output.get("value") or {}, self._confianzas_por_campo(output.get("metadata"))
 
     async def listar_procesadores(self, tipo_extend: str) -> list:
         """

@@ -22,190 +22,196 @@
   </table>
 </div>
 
-<!-- Modal: crear / editar procesador -->
+<!-- Modal: asistente de 2 pasos para crear / editar procesador -->
 <div class="modal-fondo" id="modal-proc">
   <div class="modal ancha">
     <h3 id="mp-titulo">Nuevo procesador</h3>
-    <p class="modal-sub">Une una ruta del catálogo con su procesador de Extend (publicado o inline).</p>
+    <p class="modal-sub">Une una ruta del catálogo con su procesador de Extend. La configuración se publica en Extend al guardar.</p>
 
-    <!-- Sección 1: identidad de la fila (ruta + operación + clase) -->
-    <div class="seccion-modal">
-      <div class="seccion-modal-titulo">Identidad</div>
-      <div class="fila">
-        <div>
-          <label for="pr-ruta">Ruta</label>
-          <select id="pr-ruta"></select>
-          <span class="campo-ayuda">Ruta del catálogo que usará este procesador.</span>
+    <!-- Indicador de pasos -->
+    <div class="pasos-indicador">
+      <div class="paso-chip activo" id="chip-paso-1">
+        <span class="paso-num">1</span> Identidad
+      </div>
+      <div class="paso-conector"></div>
+      <div class="paso-chip" id="chip-paso-2">
+        <span class="paso-num">2</span> Configuración
+      </div>
+    </div>
+
+    <!-- ====================== PASO 1: IDENTIDAD ====================== -->
+    <div id="paso-1" class="paso-cuerpo">
+      <div class="seccion-modal">
+        <div class="seccion-modal-titulo">¿Qué configura esta fila?</div>
+        <p class="modal-sub">
+          Define a qué ruta, operación y clase de documento se aplica. Esto solo
+          enruta; la configuración del procesador se edita en el paso siguiente.
+        </p>
+        <div class="fila">
+          <div>
+            <label for="pr-ruta">Ruta</label>
+            <select id="pr-ruta"></select>
+            <span class="campo-ayuda">Ruta del catálogo que usará este procesador.</span>
+          </div>
+          <div>
+            <label for="pr-operacion">Operación</label>
+            <select id="pr-operacion">
+              <option value="clasificar">clasificar — detecta el tipo de documento</option>
+              <option value="extraer">extraer — lee campos del documento</option>
+              <option value="parse">parse — convierte a texto (OCR)</option>
+            </select>
+          </div>
+          <div id="campo-clase">
+            <label for="pr-clase">Clase del documento</label>
+            <input type="text" id="pr-clase" placeholder="CEDULA, PASAPORTE, DEPOSITO…">
+            <span class="campo-ayuda">Qué tipo de documento extrae esta fila. Vacío si aplica a todas las clases.</span>
+          </div>
+          <div id="campo-umbral">
+            <label for="pr-umbral">Umbral mínimo (0 – 1)</label>
+            <input type="text" id="pr-umbral" placeholder="0.85">
+            <span class="campo-ayuda">Confianza mínima para dar el tipo por válido. Vacío = 0.85.</span>
+          </div>
         </div>
-        <div>
-          <label for="pr-operacion">Operación</label>
-          <select id="pr-operacion">
-            <option value="clasificar">clasificar — detecta el tipo de documento</option>
-            <option value="extraer">extraer — lee campos del documento</option>
-            <option value="parse">parse — convierte a texto (OCR)</option>
+        <div id="identidad-fija-aviso" class="nota-info oculto">
+          La identidad (ruta, operación y clase) no se puede cambiar al editar. Elimina y vuelve a crear si necesitas modificarla.
+        </div>
+      </div>
+    </div>
+
+    <!-- ====================== PASO 2: CONFIGURACIÓN ====================== -->
+    <div id="paso-2" class="paso-cuerpo oculto">
+
+      <!-- Procesador de Extend: picker + cargar config al editor (oculto en parse) -->
+      <div id="seccion-modelo" class="seccion-modal">
+        <div class="seccion-modal-titulo">Procesador de Extend</div>
+        <p class="modal-sub">
+          Elige el procesador publicado en Extend Studio que ejecuta esta ruta.
+          Puedes traer su configuración actual al editor con el botón, ajustarla,
+          y al guardar se publica una versión nueva.
+        </p>
+        <div class="acciones">
+          <button class="btn-suave" type="button"
+                  onclick="cargarExtend($('#pr-operacion').val(),'pr-extend','pr-version','pr-pid')">
+            Cargar de Extend Studio
+          </button>
+        </div>
+        <div class="fila" style="margin-top:4px">
+          <div>
+            <label for="pr-extend">Procesador</label>
+            <select id="pr-extend" onchange="elegirExtend('pr-extend','pr-version','pr-pid')"><option value="">— Elige uno —</option></select>
+          </div>
+          <div>
+            <label for="pr-version">Versión</label>
+            <select id="pr-version">
+              <option value="">Última publicada (recomendado)</option>
+            </select>
+            <span class="campo-ayuda">Elige una versión para traer su configuración al editor.</span>
+          </div>
+        </div>
+        <div style="margin-top:8px">
+          <label for="pr-pid">ID del procesador</label>
+          <input type="text" id="pr-pid" placeholder="cl_… para clasificar · ex_… para extraer">
+          <span class="campo-ayuda">Se rellena al elegir arriba, o pégalo a mano desde Extend Studio (<b>cl_</b> clasificador · <b>ex_</b> extractor).</span>
+        </div>
+        <div class="acciones" style="margin-top:10px">
+          <button class="btn-suave" type="button" onclick="cargarConfigModelo()">⤵ Cargar configuración al editor</button>
+        </div>
+      </div>
+
+      <!-- Builder de clasificaciones (operación 'clasificar') -->
+      <div id="clasif-seccion" class="seccion-modal">
+        <div class="seccion-modal-titulo">Clasificaciones de este clasificador</div>
+        <p class="modal-sub">
+          Define cada tipo de documento que este clasificador puede detectar.
+          La <b>descripción</b> es el prompt que guía al modelo: cuanto más detallada,
+          mejor clasifica. Si dejas la tabla vacía, la ruta usará los prompts globales.
+          La clase de descarte <code>other</code> se añade sola.
+        </p>
+        <div class="tabla-envoltura">
+          <table class="tabla">
+            <thead>
+              <tr>
+                <th title="Identificador interno único, en minúsculas (ej: cedula, deposito). Se usa como id en la llamada a Extend.">Clave (id)</th>
+                <th title="Etiqueta que devuelve Extend al clasificar (ej: CEDULA). En mayúsculas por convención.">Etiqueta (type)</th>
+                <th title="Describe el documento con el mayor detalle posible. Es el prompt que guía al modelo para reconocerlo.">Descripción — prompt al modelo</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="cb-cuerpo"></tbody>
+          </table>
+        </div>
+        <div class="acciones">
+          <button class="btn-suave" type="button" onclick="agregarClasif()">➕ Añadir clase</button>
+          <button class="btn-suave" type="button" onclick="exportarJson(construirClasifs, 'clasificaciones')">Exportar JSON</button>
+          <button class="btn-texto" type="button" onclick="alternarJsonClasif()">{ } Ver JSON generado</button>
+        </div>
+        <pre id="cb-json" class="oculto json-preview"></pre>
+      </div>
+
+      <!-- Schema builder (operación 'extraer') -->
+      <div id="sb-seccion" class="seccion-modal">
+        <div class="seccion-modal-titulo">Campos que extrae este procesador</div>
+        <p class="modal-sub">
+          Cada fila define un campo que el modelo intentará leer del documento.
+          La <b>descripción</b> es el prompt: explica dónde aparece el dato y su formato.
+          Cuanto más precisa, mejor extrae.
+        </p>
+        <div class="tabla-envoltura">
+          <table class="tabla">
+            <thead>
+              <tr>
+                <th title="Nombre de la propiedad en el JSON de respuesta, en snake_case (ej: numero_cedula).">Clave (snake_case)</th>
+                <th title="Tipo del dato esperado. 'Avanzado' indica un tipo complejo importado de Extend.">Tipo</th>
+                <th title="Describe cómo aparece este campo en el documento. Incluye ejemplos y formato si ayuda al modelo.">Descripción — prompt al modelo</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="sb-cuerpo"></tbody>
+          </table>
+        </div>
+        <div class="acciones">
+          <button class="btn-suave" type="button" onclick="agregarCampo()">➕ Añadir campo</button>
+          <button class="btn-suave" type="button" onclick="exportarJson(construirEsquema, 'esquema-extraccion')">Exportar JSON</button>
+          <button class="btn-texto" type="button" onclick="alternarJson()">{ } Ver JSON generado</button>
+        </div>
+        <pre id="sb-json" class="oculto json-preview"></pre>
+      </div>
+
+      <!-- Opciones de parse (operación 'parse'/OCR). -->
+      <div id="parse-seccion" class="seccion-modal">
+        <div class="seccion-modal-titulo">Formato de salida del OCR</div>
+        <div style="max-width:280px">
+          <label for="pr-target">Formato de salida</label>
+          <select id="pr-target">
+            <option value="markdown">markdown — con estructura de titulos y tablas</option>
+            <option value="text">text — texto plano sin formato</option>
           </select>
         </div>
+        <p class="modal-sub" style="margin-top:10px">
+          El parser (OCR) no tiene procesador en Extend: esta opción se guarda
+          en la configuración local de la ruta.
+        </p>
+      </div>
+
+      <!-- Aviso destacado: al guardar se publica en producción (oculto en parse). -->
+      <div id="aviso-publicar" class="nota-publicar">
+        <span class="nota-publicar-icono">⚠️</span>
         <div>
-          <label for="pr-clase">Clase del documento</label>
-          <input type="text" id="pr-clase" placeholder="CEDULA, PASAPORTE, DEPOSITO…">
-          <span class="campo-ayuda">Solo para "extraer": qué tipo de documento extrae esta fila. Vacío si aplica a todas las clases.</span>
-        </div>
-      </div>
-      <div id="identidad-fija-aviso" class="nota-info oculto">
-        La identidad (ruta, operación y clase) no se puede cambiar al editar. Elimina y vuelve a crear si necesitas modificarla.
-      </div>
-    </div>
-
-    <!-- Sección 2: modo de ejecución -->
-    <div class="seccion-modal">
-      <div class="seccion-modal-titulo">Modo de ejecución</div>
-      <div style="max-width:360px">
-        <label for="pr-modo">Modo</label>
-        <select id="pr-modo" onchange="actualizarModo()">
-          <option value="inline">inline — la configuración se guarda aquí</option>
-          <option value="id">id — usa un procesador publicado en Extend Studio</option>
-        </select>
-        <span class="campo-ayuda">
-          <b>inline</b>: el clasificador o extractor usa las clasificaciones / campos definidos abajo.<br>
-          <b>id</b>: delega en un procesador ya publicado en Extend Studio (cl_… o ex_…).
-        </span>
-      </div>
-    </div>
-
-    <!-- Sección 3: procesador publicado (solo cuando modo = id) -->
-    <div id="seccion-modo-id" class="seccion-modal oculto">
-      <div class="seccion-modal-titulo">Procesador publicado en Extend</div>
-      <label for="pr-pid">ID del procesador</label>
-      <input type="text" id="pr-pid" placeholder="cl_… para clasificar · ex_… para extraer">
-      <span class="campo-ayuda">Copia el ID desde Extend Studio. Empieza con <b>cl_</b> para clasificadores o <b>ex_</b> para extractores.</span>
-      <div class="acciones">
-        <button class="btn-suave" type="button"
-                onclick="cargarExtend($('#pr-operacion').val(),'pr-extend','pr-version','pr-pid')">
-          Cargar desde Extend Studio
-        </button>
-      </div>
-      <div class="fila" style="margin-top:4px">
-        <div>
-          <label for="pr-extend">Procesador (sincronizado)</label>
-          <select id="pr-extend" onchange="elegirExtend('pr-extend','pr-version','pr-pid')"><option value="">— Elige uno —</option></select>
-        </div>
-        <div>
-          <label for="pr-version">Versión a ejecutar</label>
-          <select id="pr-version">
-            <option value="">Última publicada (recomendado)</option>
-            <option value="draft">Borrador — cambios sin publicar aún</option>
-          </select>
-          <span class="campo-ayuda">Fija una versión solo si necesitas reproducibilidad exacta.</span>
-        </div>
-      </div>
-
-      <div class="nota-advertencia" style="margin-top:14px">
-        <div class="nota-fila">
-          <label class="label-check" for="pr-sync">
-            <input type="checkbox" id="pr-sync" checked>
-            Al guardar, empujar este esquema al borrador del procesador en Extend
-          </label>
-        </div>
-        <div class="nota-fila" style="margin-top:6px">
-          <label class="label-check" for="pr-publicar">
-            <input type="checkbox" id="pr-publicar">
-            Publicar la versión automáticamente (release minor)
-          </label>
-          <span class="campo-ayuda campo-ayuda-error">
-            Las rutas configuradas en "última publicada" usarán el cambio de inmediato.
-          </span>
+          <b>Al guardar se publica una versión nueva en Extend.</b>
+          La configuración del editor se sube al procesador y se publica de
+          inmediato; las peticiones de producción de esta ruta usarán la nueva
+          versión desde ese momento. Revisa la configuración antes de guardar.
         </div>
       </div>
     </div>
 
-    <!-- Umbral (solo clasificar) -->
-    <div id="seccion-umbral" class="seccion-modal oculto">
-      <div class="seccion-modal-titulo">Umbral de confianza</div>
-      <div style="max-width:200px">
-        <label for="pr-umbral">Umbral mínimo (0 – 1)</label>
-        <input type="text" id="pr-umbral" placeholder="0.85">
-        <span class="campo-ayuda">El clasificador debe superar este nivel de confianza para dar el tipo por válido. Vacío = 0.85.</span>
-      </div>
-    </div>
-
-    <!-- Builder de clasificaciones (solo operación 'clasificar' en modo inline):
-         las clases que el modelo puede devolver, con la descripción que lo guía. -->
-    <div id="clasif-seccion" class="seccion-modal">
-      <div class="seccion-modal-titulo">Clasificaciones de este clasificador</div>
-      <p class="modal-sub">
-        Define cada tipo de documento que este clasificador puede detectar.
-        La <b>descripción</b> es el prompt que guía al modelo: cuanto más detallada,
-        mejor clasifica. Si dejas la tabla vacía, la ruta usará los prompts globales.
-        La clase de descarte <code>other</code> se añade sola.
-      </p>
-      <div class="tabla-envoltura">
-        <table class="tabla">
-          <thead>
-            <tr>
-              <th title="Identificador interno único, en minúsculas (ej: cedula, deposito). Se usa como id en la llamada a Extend.">Clave (id)</th>
-              <th title="Etiqueta que devuelve Extend al clasificar (ej: CEDULA). En mayúsculas por convención.">Etiqueta (type)</th>
-              <th title="Describe el documento con el mayor detalle posible. Es el prompt que guía al modelo para reconocerlo.">Descripción — prompt al modelo</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody id="cb-cuerpo"></tbody>
-        </table>
-      </div>
-      <div class="acciones">
-        <button class="btn-suave" type="button" onclick="agregarClasif()">➕ Añadir clase</button>
-        <button class="btn-suave" type="button" onclick="importarClasifs('pr-pid','pr-version')">Importar de Extend</button>
-        <button class="btn-suave" type="button" onclick="exportarJson(construirClasifs, 'clasificaciones')">Exportar JSON</button>
-        <button class="btn-texto" type="button" onclick="alternarJsonClasif()">{ } Ver JSON generado</button>
-      </div>
-      <pre id="cb-json" class="oculto json-preview"></pre>
-    </div>
-
-    <!-- Schema builder (solo operación 'extraer'): define las propiedades del
-         esquema con clave, tipo y descripción; el JSON Schema se genera solo. -->
-    <div id="sb-seccion" class="seccion-modal">
-      <div class="seccion-modal-titulo">Campos que extrae este procesador</div>
-      <p class="modal-sub">
-        Cada fila define un campo que el modelo intentará leer del documento.
-        La <b>descripción</b> es el prompt: explica dónde aparece el dato y su formato.
-        Cuanto más precisa, mejor extrae.
-      </p>
-      <div class="tabla-envoltura">
-        <table class="tabla">
-          <thead>
-            <tr>
-              <th title="Nombre de la propiedad en el JSON de respuesta, en snake_case (ej: numero_cedula).">Clave (snake_case)</th>
-              <th title="Tipo del dato esperado. 'Avanzado' indica un tipo complejo importado de Extend.">Tipo</th>
-              <th title="Describe cómo aparece este campo en el documento. Incluye ejemplos y formato si ayuda al modelo.">Descripción — prompt al modelo</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody id="sb-cuerpo"></tbody>
-        </table>
-      </div>
-      <div class="acciones">
-        <button class="btn-suave" type="button" onclick="agregarCampo()">➕ Añadir campo</button>
-        <button class="btn-suave" type="button" onclick="importarEsquema('pr-pid','pr-version')">Importar de Extend</button>
-        <button class="btn-suave" type="button" onclick="exportarJson(construirEsquema, 'esquema-extraccion')">Exportar JSON</button>
-        <button class="btn-texto" type="button" onclick="alternarJson()">{ } Ver JSON generado</button>
-      </div>
-      <pre id="sb-json" class="oculto json-preview"></pre>
-    </div>
-
-    <!-- Opciones de parse (solo operación 'parse'/OCR). -->
-    <div id="parse-seccion" class="seccion-modal">
-      <div class="seccion-modal-titulo">Formato de salida del OCR</div>
-      <div style="max-width:280px">
-        <label for="pr-target">Formato de salida</label>
-        <select id="pr-target">
-          <option value="markdown">markdown — con estructura de titulos y tablas</option>
-          <option value="text">text — texto plano sin formato</option>
-        </select>
-      </div>
-    </div>
-
+    <!-- ====================== PIE: NAVEGACIÓN ====================== -->
     <div class="modal-acciones">
       <button class="btn-texto" onclick="cerrarModal('modal-proc')">Cancelar</button>
-      <button class="btn-principal" onclick="guardarProc()">Guardar procesador</button>
+      <span style="flex:1"></span>
+      <button class="btn-suave oculto" id="btn-atras" type="button" onclick="irPaso(1)">← Atrás</button>
+      <button class="btn-principal" id="btn-siguiente" type="button" onclick="irPaso(2)">Siguiente →</button>
+      <button class="btn-principal oculto" id="btn-guardar" type="button" onclick="guardarProc()">Guardar y publicar</button>
     </div>
   </div>
 </div>
@@ -233,6 +239,50 @@
   margin-bottom: 10px;
 }
 
+/* ---- Indicador de pasos del asistente ---- */
+.pasos-indicador {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 4px;
+}
+.paso-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: .82rem;
+  font-weight: 500;
+  color: var(--md-on-surface-variant);
+}
+.paso-chip.activo {
+  color: var(--md-on-surface);
+}
+.paso-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 100px;
+  font-size: .78rem;
+  background: var(--md-surface-container-high);
+  color: var(--md-on-surface-variant);
+}
+.paso-chip.activo .paso-num {
+  background: var(--md-primary);
+  color: var(--md-on-primary);
+}
+.paso-chip.completado .paso-num {
+  background: var(--md-primary-container);
+  color: var(--md-on-primary-container);
+}
+.paso-conector {
+  flex: 1;
+  height: 1px;
+  background: var(--md-outline-variant);
+  max-width: 120px;
+}
+
 /* ---- Texto de ayuda bajo campos ---- */
 .campo-ayuda {
   display: block;
@@ -255,32 +305,24 @@
   color: var(--md-on-surface-variant);
   margin-top: 10px;
 }
-.nota-advertencia {
-  background: var(--md-surface-container);
-  border: 1px solid var(--md-outline-variant);
-  border-radius: var(--md-radio-s);
-  padding: 12px 14px;
-}
-.nota-fila {
+
+/* ---- Aviso destacado de publicación en producción ---- */
+.nota-publicar {
   display: flex;
   align-items: flex-start;
-  flex-direction: column;
-  gap: 4px;
+  gap: 12px;
+  margin-top: 22px;
+  padding: 14px 16px;
+  background: var(--md-error-container);
+  color: var(--md-on-error-container);
+  border-radius: var(--md-radio-s);
+  font-size: .85rem;
+  line-height: 1.45;
 }
-.label-check {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: .875rem;
-  font-weight: 400;
-  color: var(--md-on-surface);
-  cursor: pointer;
-  margin: 0;
-}
-.label-check input[type=checkbox] {
-  width: auto;
+.nota-publicar-icono {
+  font-size: 1.15rem;
+  line-height: 1.2;
   flex-shrink: 0;
-  cursor: pointer;
 }
 
 /* ---- JSON preview (solo lectura) ---- */
@@ -718,22 +760,29 @@ function exportarJson(construir, nombre) {
   avisar(`Exportado como ${nombre}.json.`);
 }
 
-// Muestra/oculta las secciones según la operación y el modo elegidos.
+// Muestra/oculta las secciones del paso 2 según la operación. El modo NO lo
+// elige el usuario: se deriva de la operación (parse -> inline; clasificar y
+// extraer -> id).
 function actualizarSecciones() {
   const op = $("#pr-operacion").val();
+  const esParse = op === "parse";
+  // Paso 1: la clase solo aplica a 'extraer'; el umbral solo a 'clasificar'.
+  $("#campo-clase").toggleClass("oculto", op !== "extraer");
+  $("#campo-umbral").toggleClass("oculto", op !== "clasificar");
+  // Paso 2: builder y opciones según la operación.
   $("#clasif-seccion").toggleClass("oculto", op !== "clasificar");
   $("#sb-seccion").toggleClass("oculto", op !== "extraer");
-  $("#parse-seccion").toggleClass("oculto", op !== "parse");
-  $("#seccion-umbral").toggleClass("oculto", op !== "clasificar");
-  actualizarModo();
+  $("#parse-seccion").toggleClass("oculto", !esParse);
+  // El procesador de Extend y el aviso de publicación se ocultan en parse.
+  $("#seccion-modelo").toggleClass("oculto", esParse);
+  $("#aviso-publicar").toggleClass("oculto", esParse);
+  // El botón de guardar refleja si se publica o solo se guarda local.
+  $("#btn-guardar").text(esParse ? "Guardar" : "Guardar y publicar");
 }
 
-// Muestra/oculta la sección de procesador publicado según el modo.
-function actualizarModo() {
-  const modo = $("#pr-modo").val();
-  const op = $("#pr-operacion").val();
-  const esId = modo === "id" && op !== "parse";
-  $("#seccion-modo-id").toggleClass("oculto", !esId);
+// Deriva el modo de ejecución de la operación elegida.
+function modoDeOperacion(op) {
+  return op === "parse" ? "inline" : "id";
 }
 
 // Lee un umbral de confianza y devuelve [ok, valor]. valor es null si está vacío.
@@ -746,6 +795,26 @@ function leerUmbral(texto) {
     return [false, null];
   }
   return [true, n];
+}
+
+// --- Navegación del asistente de 2 pasos ---
+
+// Cambia de paso (1 = identidad, 2 = configuración) y ajusta indicador y botones.
+function irPaso(n) {
+  if (n === 2) {
+    // Antes de pasar a configurar, valida que haya una ruta elegida (al crear).
+    if (procEnEdicion === null && !$("#pr-ruta").val()) {
+      avisar("No hay rutas activas en el catálogo; crea una en la pestaña Rutas.", true);
+      return;
+    }
+  }
+  $("#paso-1").toggleClass("oculto", n !== 1);
+  $("#paso-2").toggleClass("oculto", n !== 2);
+  $("#chip-paso-1").toggleClass("activo", n === 1).toggleClass("completado", n === 2);
+  $("#chip-paso-2").toggleClass("activo", n === 2);
+  $("#btn-atras").toggleClass("oculto", n === 1);
+  $("#btn-siguiente").toggleClass("oculto", n === 2);
+  $("#btn-guardar").toggleClass("oculto", n === 1);
 }
 
 // --- Sincronización con Extend Studio ---
@@ -782,22 +851,19 @@ async function preseleccionarExtend(tipo, pid, version) {
   if (version) $("#pr-version").val(version);
 }
 
-// Opciones fijas del select de versión. value = lo que se guarda y se envía al
-// ejecutar ('' = última publicada, 'draft' = borrador, o el NÚMERO publicado);
-// data-vid = el id interno de la versión (lo que necesita importar el esquema).
-function opcionesVersionBase() {
-  return '<option value="">Última publicada (recomendado)</option>' +
-         '<option value="draft">Borrador — cambios sin publicar aún</option>';
-}
-
-// Al elegir un procesador del select: rellena el id y las versiones disponibles.
+// Al elegir un procesador del select: rellena el id y lista las versiones
+// PUBLICADAS, la más reciente marcada "(última)". value = número de versión;
+// data-vid = id interno de la versión (lo que necesita importar la config).
 function elegirExtend(selProcId, selVerId, inpPidId) {
   const id = $("#" + selProcId).val();
   const p = EXTEND_CACHE[id];
   $("#" + inpPidId).val(id);
-  $("#" + selVerId).html(opcionesVersionBase() +
-    ((p && p.versiones) || []).map(v =>
-      `<option value="${escapar(v.version)}" data-vid="${escapar(v.id)}">v${escapar(v.version)}</option>`).join(""));
+  const versiones = (p && p.versiones) || [];
+  const opciones = versiones.map((v, i) =>
+    `<option value="${escapar(v.version)}" data-vid="${escapar(v.id)}"${i === 0 ? " selected" : ""}>` +
+    `v${escapar(v.version)}${i === 0 ? " (última)" : ""}</option>`).join("");
+  $("#" + selVerId).html(
+    '<option value="">Última publicada (recomendado)</option>' + opciones);
 }
 
 // Trae el JSON Schema de un extractor de Extend y lo vuelca al schema builder.
@@ -819,15 +885,27 @@ async function importarEsquema(inpPidId, selVerId) {
   avisar((cuerpo && cuerpo.detail) || `No se pudo importar el esquema (HTTP ${status}).`, true);
 }
 
+// Vuelca la configuración de la versión elegida de Extend al editor que
+// corresponde a la operación: schema builder (extraer) o builder de
+// clasificaciones (clasificar). Lo invoca el botón "Cargar configuración al editor".
+function cargarConfigModelo() {
+  const op = $("#pr-operacion").val();
+  if (op === "extraer") {
+    importarEsquema("pr-pid", "pr-version");
+  } else if (op === "clasificar") {
+    importarClasifs("pr-pid", "pr-version");
+  } else {
+    avisar("El parser (OCR) no tiene configuración importable desde Extend.", true);
+  }
+}
+
 // --- Crear / editar (mismo modal) ---
 
 function _limpiarModalProc() {
   $("#pr-clase, #pr-pid, #pr-umbral").val("");
   $("#pr-extend").html('<option value="">— Elige uno —</option>');
-  $("#pr-version").html(opcionesVersionBase());
+  $("#pr-version").html('<option value="">Última publicada (recomendado)</option>');
   $("#pr-target").val("markdown");
-  $("#pr-sync").prop("checked", true);
-  $("#pr-publicar").prop("checked", false);
   $("#sb-json, #cb-json").addClass("oculto");
   $("#identidad-fija-aviso").addClass("oculto");
 }
@@ -837,13 +915,13 @@ function abrirCrearProc() {
   $("#mp-titulo").text("Nuevo procesador");
   // La identidad (ruta, operación, clase) se elige al crear.
   $("#pr-ruta, #pr-operacion, #pr-clase").prop("disabled", false);
-  $("#pr-modo").val("inline");
   _limpiarModalProc();
   CAMPOS = [{ clave: "", tipo: "string", descripcion: "" }];
   renderCampos();
   CLASIFS = [];          // vacío = la ruta usa los prompts globales
   renderClasifs();
   actualizarSecciones();
+  irPaso(1);
   abrirModal("modal-proc");
 }
 
@@ -858,15 +936,10 @@ function abrirEditarProc(id) {
   $("#pr-operacion").val(p.operacion).prop("disabled", true);
   $("#pr-clase").val(p.clase).prop("disabled", true);
   $("#identidad-fija-aviso").removeClass("oculto");
-  $("#pr-modo").val(p.modo);
   $("#pr-pid").val(p.procesador_id || "");
-  if (p.version === "draft") {
-    $("#pr-version").val("draft");
-  } else if (p.version) {
-    $("#pr-version").html(opcionesVersionBase() +
-      `<option value="${escapar(p.version)}" selected>v${escapar(p.version)}</option>`);
-  }
   $("#pr-umbral").val(p.umbral ?? "");
+  // El builder parte de la config local de la fila; se puede recargar desde
+  // Extend con el botón "Cargar configuración al editor".
   if (p.operacion === "extraer") {
     CAMPOS = esquemaAFilas(p.esquema);
     if (!CAMPOS.length) CAMPOS = [{ clave: "", tipo: "string", descripcion: "" }];
@@ -878,6 +951,7 @@ function abrirEditarProc(id) {
     renderClasifs();
   }
   actualizarSecciones();
+  irPaso(1);
   abrirModal("modal-proc");
 
   // Si la fila usa un procesador publicado de Extend, carga la lista y deja
@@ -889,77 +963,106 @@ function abrirEditarProc(id) {
 
 async function guardarProc() {
   const op = $("#pr-operacion").val();
-  const modo = $("#pr-modo").val();
+  const modo = modoDeOperacion(op);
   const procesador_id = $("#pr-pid").val().trim();
-  const version = $("#pr-version").val() || null;
   const [ok_umb, umbral] = leerUmbral($("#pr-umbral").val());
   if (!ok_umb) return;
 
-  // El esquema sale del builder que corresponde a la operación:
-  // clasificar -> clasificaciones propias (o null = prompts globales),
-  // extraer -> campos del schema builder, parse -> target.
-  let esquema = null;
+  // La config del editor se publica en Extend (clasificar/extraer) o se guarda
+  // local (parse). La fila NO persiste el esquema para clasificar/extraer:
+  // Extend es la fuente de verdad.
+  let esquemaFila = null;     // lo que se guarda en la fila local
+  let configExtend = null;    // lo que se publica en Extend (clasificar/extraer)
+
   if (op === "clasificar") {
-    const [ok_cl, esq] = construirClasifs();
-    if (!ok_cl) return;
-    esquema = esq;
-  } else if (op === "extraer") {
-    const [ok_esq, esq] = construirEsquema();
-    if (!ok_esq) return;
-    esquema = esq;
-    if (modo === "inline" && !esquema) {
-      avisar("Una extracción inline necesita al menos un campo en el schema builder.", true);
+    if (!procesador_id) {
+      avisar("Elige el procesador de Extend (o pega su id cl_…) en el paso de configuración.", true);
       return;
     }
+    const [ok_cl, esq] = construirClasifs();
+    if (!ok_cl) return;
+    if (!esq) {
+      avisar("Añade al menos una clasificación para publicar en Extend.", true);
+      return;
+    }
+    configExtend = esq;       // {classifications:[...]}
+  } else if (op === "extraer") {
+    if (!procesador_id) {
+      avisar("Elige el procesador de Extend (o pega su id ex_…) en el paso de configuración.", true);
+      return;
+    }
+    const [ok_esq, esq] = construirEsquema();
+    if (!ok_esq) return;
+    if (!esq) {
+      avisar("Añade al menos un campo al schema builder para publicar en Extend.", true);
+      return;
+    }
+    configExtend = esq;       // JSON Schema
   } else if (op === "parse") {
-    esquema = { target: $("#pr-target").val() || "markdown" };
+    esquemaFila = { target: $("#pr-target").val() || "markdown" };
   }
 
+  // 1) Guarda la fila local (POST al crear, PUT al editar). Para clasificar y
+  //    extraer la fila va en modo 'id' con esquema/versión nulos.
   let resp;
   if (procEnEdicion === null) {
     const ruta = $("#pr-ruta").val();
-    const operacion = $("#pr-operacion").val();
     const clase = $("#pr-clase").val().trim();
     if (!ruta) { avisar("No hay rutas activas en el catálogo; crea una en la pestaña Rutas.", true); return; }
     resp = await llamar(API_PROCESADORES, {
       method: "POST",
-      body: JSON.stringify({ ruta, operacion, clase, modo, procesador_id: procesador_id || null, version, esquema, umbral }),
+      body: JSON.stringify({
+        ruta, operacion: op, clase, modo,
+        procesador_id: op === "parse" ? null : procesador_id,
+        version: null, esquema: esquemaFila, umbral,
+      }),
     });
   } else {
     resp = await llamar(API_PROCESADORES + procEnEdicion, {
       method: "PUT",
-      body: JSON.stringify({ modo, procesador_id: procesador_id || null, version, esquema, umbral }),
+      body: JSON.stringify({
+        modo,
+        procesador_id: op === "parse" ? null : procesador_id,
+        version: null, esquema: esquemaFila, umbral,
+      }),
     });
   }
+
   const { status, ok, cuerpo } = resp;
-  if (ok) {
-    cerrarModal("modal-proc");
-    const idFila = procEnEdicion === null ? (cuerpo && cuerpo.id) : procEnEdicion;
-    let msg = procEnEdicion === null ? "Procesador creado." : `Procesador #${procEnEdicion} actualizado.`;
-    let conError = false;
-    // Empuja el esquema guardado al procesador publicado en Extend (borrador),
-    // y opcionalmente publica la versión.
-    if ($("#pr-sync").is(":checked") && procesador_id && esquema && op !== "parse") {
-      const publicar = $("#pr-publicar").is(":checked");
-      const rs = await llamar(API_PROCESADORES + idFila + "/extend" + (publicar ? "?publicar=true" : ""),
-                              { method: "POST" });
-      if (rs.ok) {
-        const vPub = rs.cuerpo && rs.cuerpo.version_publicada;
-        msg += vPub
-          ? ` Esquema actualizado y publicado en Extend como v${vPub}.`
-          : " Esquema actualizado en Extend (versión borrador).";
-      } else {
-        conError = true;
-        msg += " Guardado local correcto, pero Extend no se actualizó: " +
-               ((rs.cuerpo && rs.cuerpo.detail) || `HTTP ${rs.status}`);
-      }
+  if (!ok) {
+    if (sesionInvalida(status)) return;
+    avisar((cuerpo && cuerpo.detail) || `No se pudo guardar (HTTP ${status}).`, true);
+    return;
+  }
+
+  const idFila = procEnEdicion === null ? (cuerpo && cuerpo.id) : procEnEdicion;
+  let msg = procEnEdicion === null ? "Procesador creado." : `Procesador #${procEnEdicion} actualizado.`;
+
+  // 2) Para clasificar/extraer, publica la config en Extend (release minor).
+  if (op !== "parse") {
+    const rs = await llamar(API_PROCESADORES + idFila + "/extend", {
+      method: "POST",
+      body: JSON.stringify({ esquema: configExtend }),
+    });
+    if (rs.ok) {
+      const vPub = rs.cuerpo && rs.cuerpo.version_publicada;
+      msg += vPub
+        ? ` Configuración publicada en Extend como v${vPub}; producción ya la usa.`
+        : " Configuración publicada en Extend; producción ya la usa.";
+      cerrarModal("modal-proc");
+      avisar(msg);
+    } else {
+      // La fila se guardó pero Extend falló: el modal queda abierto para reintentar.
+      avisar("Fila guardada, pero la publicación en Extend falló: " +
+             ((rs.cuerpo && rs.cuerpo.detail) || `HTTP ${rs.status}`), true);
     }
-    avisar(msg, conError);
     cargarDatos();
     return;
   }
-  if (sesionInvalida(status)) return;
-  avisar((cuerpo && cuerpo.detail) || `No se pudo guardar (HTTP ${status}).`, true);
+
+  cerrarModal("modal-proc");
+  avisar(msg);
+  cargarDatos();
 }
 
 async function alternarProc(id, activar) {
@@ -979,9 +1082,8 @@ async function eliminarProc(id) {
   avisar((cuerpo && cuerpo.detail) || `No se pudo eliminar (HTTP ${status}).`, true);
 }
 
-// Al cambiar la operación en el modal, se muestra la sección que corresponde
-// (builder para extraer, target para parse, nada para clasificar).
+// Al cambiar la operación en el modal, se muestran las secciones que
+// corresponden (clase/umbral en el paso 1; builder o parse en el paso 2).
 $("#pr-operacion").on("change", actualizarSecciones);
-$("#pr-modo").on("change", actualizarModo);
 </script>
 {% endblock %}

@@ -147,6 +147,7 @@ async def validar_documento(
         confidence=resultado["confianza"],
         ocr=resultado["ocr"],
         datos=resultado["datos"],
+        confianzas=resultado["confianzas"],
     )
 
 
@@ -224,6 +225,7 @@ async def validar_registro_senescyt(
         document_class=resultado["clase_detectada"],
         confidence=resultado["confianza"],
         datos=resultado["datos"],
+        confianzas=resultado["confianzas"],
     )
 
 
@@ -260,4 +262,5 @@ async def validar_pago(file: UploadFile = File(...)):
         document_class=resultado["clase_detectada"],
         confidence=resultado["confianza"],
         datos=resultado["datos"],
+        confianzas=resultado["confianzas"],
     )

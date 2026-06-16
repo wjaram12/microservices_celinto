@@ -21,7 +21,8 @@ from psycopg2 import errors as pg_errors
 from app.core.plantillas import plantillas
 from app.core.seguridad import requiere_admin
 from app.schemas.procesadores import (
-    ProcesadorActualizar, ProcesadorCrear, ProcesadorExtend, ProcesadorRespuesta,
+    ProcesadorActualizar, ProcesadorCrear, ProcesadorExtend,
+    ProcesadorRespuesta, PublicarConfigExtend,
 )
 from app.services.errores import ErrorDeProveedor, ErrorDeValidacion
 from app.services.procesadores import procesadores
@@ -83,16 +84,16 @@ async def esquema_de_extend(procesador_id: str, version_id: str, _admin: dict = 
 
 
 @api.post("/procesadores/{id_proc}/extend", tags=["Procesadores (admin)"])
-async def actualizar_en_extend(id_proc: int, publicar: bool = False,
-                               _admin: dict = Depends(requiere_admin)):
+async def publicar_config_en_extend(id_proc: int, datos: PublicarConfigExtend,
+                                    _admin: dict = Depends(requiere_admin)):
     """
-    Empuja el esquema guardado de la fila a su procesador publicado en Extend
-    (clasificaciones para CLASSIFY, JSON Schema para EXTRACT). Actualiza la
-    versión BORRADOR; con `publicar=true` además la publica como versión nueva
-    (release minor) — las rutas en 'última publicada' la usan de inmediato.
+    Empuja la config editada en el modal al procesador de Extend asociado
+    (clasificaciones para CLASSIFY, JSON Schema para EXTRACT) y publica una
+    versión nueva (release minor) — la ruta en 'última publicada' la usa de
+    inmediato. La config no se persiste en local: Extend es la fuente de verdad.
     """
     try:
-        resultado = await procesadores.actualizar_en_extend(id_proc, publicar=publicar)
+        resultado = await procesadores.publicar_config_en_extend(id_proc, datos.esquema)
     except ErrorDeValidacion as e:
         raise HTTPException(status_code=400, detail=str(e))
     except ErrorDeProveedor as e:

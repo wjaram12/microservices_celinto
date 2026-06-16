@@ -28,3 +28,9 @@ class RespuestaValidacion(BaseModel):
     confidence: float
     ocr: Optional[str] = None
     datos: dict = {}
+    confianzas: dict = Field(
+        default={},
+        description=("Índice de confianza 0..1 por cada campo extraído, con la misma "
+                     "clave que en `datos`; los campos anidados usan notación con punto "
+                     "(p.ej. 'monto.amount'). El valor es null si Extend no reporta "
+                     "confianza para ese campo. Vacío si no hubo extracción."))
