@@ -193,7 +193,19 @@
         </p>
       </div>
 
-      <!-- Aviso destacado: al guardar se publica en producción (oculto en parse). -->
+      <!-- Switch: publicar la config del editor en Extend al guardar (clasificar/extraer). -->
+      <label id="sync-extend-fila" class="sync-switch">
+        <input type="checkbox" id="pr-sync-extend" checked onchange="actualizarSync()">
+        <span>
+          <b>Publicar la configuración del editor en Extend al guardar</b>
+          <span class="campo-ayuda" style="margin-top:2px">
+            Desactívalo para solo guardar la fila (apuntar al procesador, cambiar
+            umbral o activarla) sin tocar la configuración publicada en Extend.
+          </span>
+        </span>
+      </label>
+
+      <!-- Aviso destacado: al guardar se publica en producción (oculto en parse o sin sync). -->
       <div id="aviso-publicar" class="nota-publicar">
         <span class="nota-publicar-icono">⚠️</span>
         <div>
@@ -324,6 +336,24 @@
   line-height: 1.2;
   flex-shrink: 0;
 }
+
+/* ---- Switch de sincronización con Extend ---- */
+.sync-switch {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 20px;
+  cursor: pointer;
+  font-size: .875rem;
+  color: var(--md-on-surface);
+}
+.sync-switch input[type=checkbox] {
+  width: auto;
+  margin-top: 3px;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+.sync-switch b { font-weight: 500; }
 
 /* ---- JSON preview (solo lectura) ---- */
 .json-preview {
@@ -773,11 +803,20 @@ function actualizarSecciones() {
   $("#clasif-seccion").toggleClass("oculto", op !== "clasificar");
   $("#sb-seccion").toggleClass("oculto", op !== "extraer");
   $("#parse-seccion").toggleClass("oculto", !esParse);
-  // El procesador de Extend y el aviso de publicación se ocultan en parse.
+  // El procesador de Extend y el switch de sincronización se ocultan en parse.
   $("#seccion-modelo").toggleClass("oculto", esParse);
-  $("#aviso-publicar").toggleClass("oculto", esParse);
-  // El botón de guardar refleja si se publica o solo se guarda local.
-  $("#btn-guardar").text(esParse ? "Guardar" : "Guardar y publicar");
+  $("#sync-extend-fila").toggleClass("oculto", esParse);
+  // El aviso de publicación y el texto del botón dependen del switch.
+  actualizarSync();
+}
+
+// El switch decide si guardar PUBLICA la config del editor en Extend. En parse
+// no aplica (OCR no tiene procesador en Extend). Ajusta el aviso y el botón.
+function actualizarSync() {
+  const esParse = $("#pr-operacion").val() === "parse";
+  const sincronizar = !esParse && $("#pr-sync-extend").is(":checked");
+  $("#aviso-publicar").toggleClass("oculto", !sincronizar);
+  $("#btn-guardar").text(sincronizar ? "Guardar y publicar" : "Guardar");
 }
 
 // Deriva el modo de ejecución de la operación elegida.
@@ -906,6 +945,7 @@ function _limpiarModalProc() {
   $("#pr-extend").html('<option value="">— Elige uno —</option>');
   $("#pr-version").html('<option value="">Última publicada (recomendado)</option>');
   $("#pr-target").val("markdown");
+  $("#pr-sync-extend").prop("checked", true);
   $("#sb-json, #cb-json").addClass("oculto");
   $("#identidad-fija-aviso").addClass("oculto");
 }
@@ -972,36 +1012,45 @@ async function guardarProc() {
   const [ok_umb, umbral] = leerUmbral($("#pr-umbral").val());
   if (!ok_umb) return;
 
-  // La config del editor se publica en Extend (clasificar/extraer) o se guarda
-  // local (parse). La fila NO persiste el esquema para clasificar/extraer:
-  // Extend es la fuente de verdad.
-  let esquemaFila = null;     // lo que se guarda en la fila local
-  let configExtend = null;    // lo que se publica en Extend (clasificar/extraer)
+  // El switch decide si la config del editor se publica en Extend al guardar.
+  // No aplica a parse (sin procesador en Extend).
+  const sincronizar = op !== "parse" && $("#pr-sync-extend").is(":checked");
+
+  // Si se sincroniza, la config del editor se publica en Extend; si no, solo se
+  // guarda la fila (apuntar al procesador, umbral, activarla) sin tocar Extend.
+  // La fila NO persiste el esquema para clasificar/extraer: Extend es la fuente
+  // de verdad.
+  let esquemaFila = null;     // lo que se guarda en la fila local (solo parse)
+  let configExtend = null;    // lo que se publica en Extend (solo si se sincroniza)
 
   if (op === "clasificar") {
     if (!procesador_id) {
       avisar("Elige el procesador de Extend (o pega su id cl_…) en el paso de configuración.", true);
       return;
     }
-    const [ok_cl, esq] = construirClasifs();
-    if (!ok_cl) return;
-    if (!esq) {
-      avisar("Añade al menos una clasificación para publicar en Extend.", true);
-      return;
+    if (sincronizar) {
+      const [ok_cl, esq] = construirClasifs();
+      if (!ok_cl) return;
+      if (!esq) {
+        avisar("Añade al menos una clasificación para publicar en Extend.", true);
+        return;
+      }
+      configExtend = esq;       // {classifications:[...]}
     }
-    configExtend = esq;       // {classifications:[...]}
   } else if (op === "extraer") {
     if (!procesador_id) {
       avisar("Elige el procesador de Extend (o pega su id ex_…) en el paso de configuración.", true);
       return;
     }
-    const [ok_esq, esq] = construirEsquema();
-    if (!ok_esq) return;
-    if (!esq) {
-      avisar("Añade al menos un campo al schema builder para publicar en Extend.", true);
-      return;
+    if (sincronizar) {
+      const [ok_esq, esq] = construirEsquema();
+      if (!ok_esq) return;
+      if (!esq) {
+        avisar("Añade al menos un campo al schema builder para publicar en Extend.", true);
+        return;
+      }
+      configExtend = esq;       // JSON Schema
     }
-    configExtend = esq;       // JSON Schema
   } else if (op === "parse") {
     esquemaFila = { target: $("#pr-target").val() || "markdown" };
   }
@@ -1042,8 +1091,9 @@ async function guardarProc() {
   const idFila = procEnEdicion === null ? (cuerpo && cuerpo.id) : procEnEdicion;
   let msg = procEnEdicion === null ? "Procesador creado." : `Procesador #${procEnEdicion} actualizado.`;
 
-  // 2) Para clasificar/extraer, publica la config en Extend (release minor).
-  if (op !== "parse") {
+  // 2) Si el switch está activo (clasificar/extraer), publica la config en Extend
+  //    (release minor). Si no, se guarda solo la fila y Extend no se toca.
+  if (sincronizar) {
     const rs = await llamar(API_PROCESADORES + idFila + "/extend", {
       method: "POST",
       body: JSON.stringify({ esquema: configExtend }),
@@ -1064,6 +1114,7 @@ async function guardarProc() {
     return;
   }
 
+  if (op !== "parse") msg += " La configuración en Extend no se modificó.";
   cerrarModal("modal-proc");
   avisar(msg);
   cargarDatos();
