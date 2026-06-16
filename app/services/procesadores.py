@@ -527,18 +527,33 @@ _CLASIF_PAGO = {"classifications": [
          "failed or rejected transaction confirmations.")},
 ]}
 
+# Con Extend.ai como fuente de verdad, las filas de clasificar/extraer se siembran
+# como ESTRUCTURA pero neutralizadas: SIN esquema local (esquema=None) y
+# DESACTIVADAS (activo=False). Existen y se ven en /admin (una por ruta/clase),
+# pero no se usan por defecto: los resolutores solo leen filas ACTIVAS. El flujo
+# es editarlas, cablearlas a su procesador de Extend (modo 'id', publica la
+# config) y activarlas. El parser OCR sí queda activo: no tiene procesador en
+# Extend y su config (target) es legítimamente local.
+#
+# El INSERT de inicializar() es directo y se salta _validar(), por eso aquí sí
+# puede haber filas 'extraer' inline con esquema=None (el CRUD normal las
+# rechazaría). Los esquemas _ESQUEMA_*/_CLASIF_* de arriba se conservan como
+# referencia para cablear los procesadores en Extend y porque migrar_validar_pago.py
+# los usa.
+#
+# (ruta, operacion, clase, modo, procesador_id, version, esquema, umbral, activo)
 SEMILLA = [
-    ("validar-identidad", "clasificar", "", "inline", None, None, None, UMBRAL_DEFECTO),
-    ("validar-identidad", "extraer", "CEDULA", "inline", None, None, _ESQUEMA_CEDULA, None),
-    ("validar-identidad", "extraer", "PASAPORTE", "inline", None, None, _ESQUEMA_PASAPORTE, None),
-    ("validar-registro-senescyt", "clasificar", "", "inline", None, None, _CLASIF_SENESCYT, UMBRAL_DEFECTO),
-    ("validar-registro-senescyt", "extraer", "REGISTRO_SENESCYT", "inline", None, None, _ESQUEMA_SENESCYT, None),
-    ("validar-registro-senescyt", "extraer", "CARTA_COMPROMISO", "inline", None, None, _ESQUEMA_CARTA_COMPROMISO, None),
-    ("validar-registro-senescyt", "extraer", "APOSTILLA", "inline", None, None, _ESQUEMA_APOSTILLA, None),
-    ("validar-pago", "clasificar", "", "inline", None, None, _CLASIF_PAGO, UMBRAL_DEFECTO),
-    ("validar-pago", "extraer", "DEPOSITO", "inline", None, None, _ESQUEMA_DEPOSITO, None),
-    ("validar-pago", "extraer", "TRANSFERENCIA", "inline", None, None, _ESQUEMA_TRANSFERENCIA, None),
-    ("ocr", "parse", "", "inline", None, None, {"target": "markdown"}, None),
+    ("validar-identidad", "clasificar", "", "inline", None, None, None, UMBRAL_DEFECTO, False),
+    ("validar-identidad", "extraer", "CEDULA", "inline", None, None, None, None, False),
+    ("validar-identidad", "extraer", "PASAPORTE", "inline", None, None, None, None, False),
+    ("validar-registro-senescyt", "clasificar", "", "inline", None, None, None, UMBRAL_DEFECTO, False),
+    ("validar-registro-senescyt", "extraer", "REGISTRO_SENESCYT", "inline", None, None, None, None, False),
+    ("validar-registro-senescyt", "extraer", "CARTA_COMPROMISO", "inline", None, None, None, None, False),
+    ("validar-registro-senescyt", "extraer", "APOSTILLA", "inline", None, None, None, None, False),
+    ("validar-pago", "clasificar", "", "inline", None, None, None, UMBRAL_DEFECTO, False),
+    ("validar-pago", "extraer", "DEPOSITO", "inline", None, None, None, None, False),
+    ("validar-pago", "extraer", "TRANSFERENCIA", "inline", None, None, None, None, False),
+    ("ocr", "parse", "", "inline", None, None, {"target": "markdown"}, None, True),
 ]
 
 _COLUMNAS = (
@@ -650,10 +665,10 @@ class ServicioProcesadores(ServicioBD):
                     if cur.fetchone()[0] == 0:
                         cur.executemany(
                             "INSERT INTO procesadores "
-                            "(ruta_id, operacion, clase, modo, procesador_id, version, esquema, umbral) "
-                            "VALUES ((SELECT id FROM rutas WHERE clave = %s), %s, %s, %s, %s, %s, %s, %s)",
-                            [(ru, op, cl, mo, pid, ver, Json(esq) if esq is not None else None, umb)
-                             for (ru, op, cl, mo, pid, ver, esq, umb) in SEMILLA],
+                            "(ruta_id, operacion, clase, modo, procesador_id, version, esquema, umbral, activo) "
+                            "VALUES ((SELECT id FROM rutas WHERE clave = %s), %s, %s, %s, %s, %s, %s, %s, %s)",
+                            [(ru, op, cl, mo, pid, ver, Json(esq) if esq is not None else None, umb, act)
+                             for (ru, op, cl, mo, pid, ver, esq, umb, act) in SEMILLA],
                         )
         except pg_errors.UniqueViolation:
             pass

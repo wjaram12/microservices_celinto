@@ -938,26 +938,30 @@ function abrirEditarProc(id) {
   $("#identidad-fija-aviso").removeClass("oculto");
   $("#pr-pid").val(p.procesador_id || "");
   $("#pr-umbral").val(p.umbral ?? "");
-  // El builder parte de la config local de la fila; se puede recargar desde
-  // Extend con el botón "Cargar configuración al editor".
-  if (p.operacion === "extraer") {
-    CAMPOS = esquemaAFilas(p.esquema);
-    if (!CAMPOS.length) CAMPOS = [{ clave: "", tipo: "string", descripcion: "" }];
-    renderCampos();
-  } else if (p.operacion === "parse") {
+  // clasificar/extraer: Extend es la fuente de verdad. NO precargamos el esquema
+  // semilla de la fila (interferiría con la config real); el builder arranca
+  // vacío y se llena con la config publicada en Extend, más abajo. parse sí usa
+  // su config local: no tiene procesador en Extend.
+  if (p.operacion === "parse") {
     $("#pr-target").val((p.esquema && p.esquema.target) || "markdown");
-  } else if (p.operacion === "clasificar") {
-    CLASIFS = clasifsAFilas(p.esquema);
+  } else {
+    CAMPOS = [];
+    CLASIFS = [];
+    renderCampos();
     renderClasifs();
   }
   actualizarSecciones();
   irPaso(1);
   abrirModal("modal-proc");
 
-  // Si la fila usa un procesador publicado de Extend, carga la lista y deja
-  // preseleccionado el que estaba elegido (id + versión).
+  // Si la fila ya apunta a un procesador de Extend, carga la lista, lo deja
+  // preseleccionado y vuelca su configuración publicada al editor (la fuente de
+  // verdad). Si el procesador no tiene una versión publicada, deja el builder
+  // vacío sin lanzar error.
   if (p.procesador_id && (p.operacion === "clasificar" || p.operacion === "extraer")) {
-    preseleccionarExtend(p.operacion, p.procesador_id, p.version);
+    preseleccionarExtend(p.operacion, p.procesador_id, p.version).then(() => {
+      if ($("#pr-version option:selected").data("vid")) cargarConfigModelo();
+    });
   }
 }
 
