@@ -22,6 +22,12 @@ class SolicitudConsulta(BaseModel):
                      "local = solo lo cacheado; senescyt = siempre en vivo."))
     force_refresh: bool = Field(
         False, description="Ignora la caché vigente y vuelve a consultar la fuente.")
+    incluir_pdf: bool = Field(
+        False,
+        description=("Si true, incluye el PDF oficial en base64 (`pdf_base64`) dentro de "
+                     "ESTA misma respuesta. Por defecto false para ahorrar ancho de banda "
+                     "(el PDF pesa ~1 MB). Solo se incluye si status='encontrado' y "
+                     "pdf_disponible=true."))
 
 
 class RespuestaConsultaTitulos(BaseModel):
@@ -48,6 +54,12 @@ class RespuestaConsultaTitulos(BaseModel):
         default=None, description="Vigencia restante de la caché en segundos (si vino de caché).")
     intentos_captcha: Optional[int] = Field(
         default=None, description="Intentos de OCR que costó resolver el captcha (consulta en vivo).")
+    pdf_base64: Optional[str] = Field(
+        default=None,
+        description=("PDF oficial en base64. Solo se llena si se pidió `incluir_pdf=true` y "
+                     "el PDF está disponible; null en caso contrario."))
+    pdf_bytes: Optional[int] = Field(
+        default=None, description="Tamaño del PDF en bytes (antes de codificar), si se incluyó.")
 
 
 class RespuestaPDF(BaseModel):

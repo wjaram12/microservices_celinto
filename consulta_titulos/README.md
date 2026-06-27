@@ -97,7 +97,14 @@ curl -X POST http://localhost:8091/consulta-titulos/ \
   -H "Content-Type: application/json" \
   -d '{"identificacion":"0912345678","force_refresh":true}'
 
-# PDF oficial en base64 (SENESCYT no publica una URL del PDF; se entrega codificado)
+# Consulta + PDF en la MISMA respuesta (campo pdf_base64). Opt-in: por defecto
+# incluir_pdf=false para ahorrar ancho de banda (~1 MB).
+curl -X POST http://localhost:8091/consulta-titulos/ \
+  -H "X-API-Key: wsk_xxxxxxxx" \
+  -H "Content-Type: application/json" \
+  -d '{"identificacion":"0912345678","incluir_pdf":true}'
+
+# PDF solo (endpoint dedicado), también en base64
 curl http://localhost:8091/consulta-titulos/0912345678/pdf \
   -H "X-API-Key: wsk_xxxxxxxx"
 

@@ -65,6 +65,7 @@ def consultar_titulos(datos: SolicitudConsulta):
             apellidos=datos.apellidos or "",
             modo=datos.modo,
             force_refresh=datos.force_refresh,
+            incluir_pdf=datos.incluir_pdf,
         )
     except ErrorDeValidacion as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -86,6 +87,8 @@ def consultar_titulos(datos: SolicitudConsulta):
         vigente=resultado["vigente"],
         ttl_segundos=resultado["ttl_segundos"],
         intentos_captcha=resultado["intentos_captcha"],
+        pdf_base64=resultado.get("pdf_base64"),
+        pdf_bytes=resultado.get("pdf_bytes"),
     )
 
 

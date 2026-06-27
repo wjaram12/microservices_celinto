@@ -88,7 +88,8 @@ class CacheTitulos:
         return ttl if ttl is not None and ttl >= 0 else None
 
     def consultar_titulo(self, identificacion: str, apellidos: str = "",
-                         modo: str = "auto", force_refresh: bool = False) -> dict:
+                         modo: str = "auto", force_refresh: bool = False,
+                         incluir_pdf: bool = False) -> dict:
         """
         Resuelve la consulta de títulos aplicando la política de caché del `modo`.
 
@@ -112,7 +113,7 @@ class CacheTitulos:
         # Lectura de caché (salvo que se fuerce refresco).
         cacheado = None if force_refresh else self._leer(cedula)
         if cacheado is not None and modo != "senescyt":
-            return self._desde_cache(cacheado, cedula)
+            return self._con_pdf(self._desde_cache(cacheado, cedula), cedula, apellidos, incluir_pdf)
 
         if modo == "local":
             # Solo caché: no se consulta la fuente.
@@ -126,6 +127,8 @@ class CacheTitulos:
                 "vigente": False,
                 "ttl_segundos": None,
                 "intentos_captcha": None,
+                "pdf_base64": None,
+                "pdf_bytes": None,
             }
 
         # modo 'auto' sin caché, o modo 'senescyt': consultar la fuente en vivo.
@@ -144,7 +147,7 @@ class CacheTitulos:
         }
         self._guardar(cedula, valor)
 
-        return {
+        return self._con_pdf({
             "status": "encontrado" if datos["encontrado"] else "no_encontrado",
             "fuente": "senescyt",
             "persona": datos["persona"],
@@ -154,7 +157,23 @@ class CacheTitulos:
             "vigente": False,
             "ttl_segundos": None,
             "intentos_captcha": datos["intentos_captcha"],
-        }
+        }, cedula, apellidos, incluir_pdf)
+
+    def _con_pdf(self, resp: dict, cedula: str, apellidos: str, incluir_pdf: bool) -> dict:
+        """Adjunta el PDF en base64 a la respuesta si se pidió `incluir_pdf` y hay PDF.
+        Reutiliza obtener_pdf (cacheado 30 días). Si el PDF falla, no rompe la consulta:
+        deja pdf_base64/pdf_bytes en None (la consulta ya fue exitosa)."""
+        resp["pdf_base64"] = None
+        resp["pdf_bytes"] = None
+        if not incluir_pdf or resp.get("status") != "encontrado" or not resp.get("pdf_disponible"):
+            return resp
+        try:
+            pdf = self.obtener_pdf(cedula, apellidos)
+            resp["pdf_base64"] = pdf["pdf_base64"]
+            resp["pdf_bytes"] = pdf["bytes"]
+        except Exception:
+            logger.warning("No se pudo incluir el PDF de '%s' en la consulta.", cedula, exc_info=True)
+        return resp
 
     def _desde_cache(self, cacheado: dict, cedula: str) -> dict:
         titulos = cacheado.get("titulos") or []
