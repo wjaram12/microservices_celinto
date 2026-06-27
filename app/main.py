@@ -11,6 +11,7 @@ secretos y el candado real está en los endpoints de administración, que exigen
 scope admin; cada página pide la clave admin al usuario y la usa en la cabecera
 X-API-Key, de modo que sin clave válida no puede hacer nada.
 """
+import logging
 from pathlib import Path
 
 from fastapi import Depends, FastAPI
@@ -26,10 +27,25 @@ from app.views import (
     adm_cache, adm_consultas, adm_consumidores, adm_procesadores, adm_prompts,
     adm_rutas, documentos,
 )
+
+logger = logging.getLogger(__name__)
+
 # La consulta de títulos SENESCYT corre EN EL MISMO servidor: se monta su router
 # (sus endpoints ya declaran su propia auth: consulta = clave válida, gestión de
 # caché = scope admin). Comparte commons (DB/Redis/api_keys) con el clasificador.
-from consulta_titulos.router import api as consulta_titulos_api, calentar_ocr
+#
+# Import TOLERANTE A FALLOS: sus dependencias son pesadas (ddddocr/onnxruntime/
+# opencv). Si no están instaladas en el servidor, NO debe tumbar el clasificador:
+# se loguea y se arranca sin esas rutas (instala consulta_titulos/requirements.txt
+# para habilitarlas).
+try:
+    from consulta_titulos.router import api as consulta_titulos_api, calentar_ocr
+    _consulta_titulos_ok = True
+except Exception:
+    logger.exception(
+        "No se pudo cargar la consulta de títulos; el clasificador arranca SIN esas "
+        "rutas. Instala consulta_titulos/requirements.txt para habilitarlas.")
+    _consulta_titulos_ok = False
 
 app = FastAPI(
     title="Core de Clasificación - Universidad",
@@ -43,10 +59,11 @@ rutas.inicializar()
 procesadores.inicializar()
 
 
-@app.on_event("startup")
-def _calentar_ocr_senescyt():
-    """Pre-carga el OCR (ddddocr) de la consulta de títulos al arrancar el worker."""
-    calentar_ocr()
+if _consulta_titulos_ok:
+    @app.on_event("startup")
+    def _calentar_ocr_senescyt():
+        """Pre-carga el OCR (ddddocr) de la consulta de títulos al arrancar el worker."""
+        calentar_ocr()
 
 
 for view in (documentos, adm_prompts, adm_rutas, adm_procesadores, adm_consumidores,
@@ -58,7 +75,9 @@ for view in (documentos, adm_prompts, adm_rutas, adm_procesadores, adm_consumido
     )
 
 # Router de consulta de títulos (auth declarada por endpoint -> sin dep global aquí).
-app.include_router(consulta_titulos_api, prefix="/api/v1")
+# Solo si sus dependencias cargaron (ver import tolerante a fallos arriba).
+if _consulta_titulos_ok:
+    app.include_router(consulta_titulos_api, prefix="/api/v1")
 
 for view in (adm_procesadores, adm_rutas, adm_consumidores, adm_consultas):
     app.include_router(view.paginas)
