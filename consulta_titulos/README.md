@@ -41,17 +41,28 @@ pip install -r requirements.txt
 ## Cómo correr (desde la carpeta `services/`)
 
 Se ejecuta como subpaquete (`consulta_titulos.*`) para poder importar `commons`.
+Hay dos modos:
 
-1. **Redis** (opcional pero recomendado para ver la caché): si no hay Redis, el
-   servicio sigue funcionando pero consulta la fuente cada vez (se ve en los logs).
-2. **Servidor mock** (un solo worker):
-   ```bash
-   uvicorn consulta_titulos.mock.main:app --port 8090
-   ```
-3. **Servicio de consulta**:
-   ```bash
-   uvicorn consulta_titulos.main:app --port 8091
-   ```
+### A) Unificado en el clasificador (recomendado) — un solo servidor
+El router de consulta de títulos se monta dentro de `app/main.py`, así el MISMO
+proceso del clasificador sirve todo. No hay que levantar nada aparte:
+```bash
+uvicorn app.main:app --port 8000        # o el gunicorn del clasificador
+```
+Las rutas quedan bajo `/api/v1/`:
+`/api/v1/consulta-titulos/`, `/api/v1/consulta-titulos/{cedula}/pdf`, etc.
+
+### B) Standalone — servidor propio
+```bash
+uvicorn consulta_titulos.main:app --port 8091
+```
+Aquí las rutas van sin el prefijo `/api/v1` (`/consulta-titulos/`, `/health`, ...).
+
+En ambos: **Redis** recomendado (sin él funciona pero consulta la fuente cada vez)
+y, para probar sin el portal real, levantar el mock:
+```bash
+uvicorn consulta_titulos.mock.main:app --port 8090
+```
 
 La configuración se lee del `.env` en la raíz `services/` (el mismo de las demás
 apps): `DATABASE_URL` (api_keys), `REDIS_URL`, y para esta app `SENESCYT_BASE_URL`
@@ -59,9 +70,13 @@ y `VERIFY_SSL`.
 
 ## Uso
 
-Todos los endpoints (salvo `/health`) exigen la cabecera `X-API-Key` con una clave
-válida de la tabla `api_keys` (el mismo sistema del resto de servicios). La gestión
-de caché requiere además scope `admin`.
+Todos los endpoints exigen la cabecera `X-API-Key` con una clave válida de la tabla
+`api_keys` (el mismo sistema del resto de servicios). La gestión de caché requiere
+además scope `admin`.
+
+> Los ejemplos usan el modo **standalone** (`:8091`, rutas sin prefijo). En el modo
+> **unificado** la base es `http://<host>:8000/api/v1/consulta-titulos/` y el
+> reinicio de caché es `POST /api/v1/consulta-titulos/cache/reiniciar`.
 
 ```bash
 # Primera consulta (en vivo: resuelve captcha por OCR) -> fuente="senescyt"
@@ -104,25 +119,28 @@ curl -X POST http://localhost:8091/cache/reiniciar \
 
 ## Despliegue en producción
 
-El servicio (`consulta_titulos.main:app`) es **stateless** (el estado compartido
-vive en Redis), así que escala con varios workers. El paquete `mock/` es **solo
-para desarrollo** y NO se despliega.
+**Recomendado: unificado en el clasificador** (un solo servidor/proceso). Como las
+rutas se montan en `app/main.py`, basta con desplegar el clasificador como siempre;
+la consulta de títulos viaja con él. El paquete `mock/` es **solo desarrollo**.
 
-1. **Configurar el entorno**: en el `.env` de `services/` (compartido) añadir:
+1. **Configurar el entorno**: en el `.env` de `services/` (compartido) añadir las 2
+   variables nuevas (las demás ya existen para el clasificador):
    ```
    SENESCYT_BASE_URL=https://www.senescyt.gob.ec
    VERIFY_SSL=false
-   REDIS_URL=redis://<host>:6379/0
-   DATABASE_URL=postgresql://<user>:<pass>@<host>:5432/<db>   # tabla api_keys
+   # DATABASE_URL y REDIS_URL ya están (se reutilizan tal cual).
    ```
-   (`DATABASE_URL` ya existe para el clasificador; se reutiliza tal cual.)
-2. **Instalar dependencias**: `pip install -r consulta_titulos/requirements.txt`.
-3. **Arrancar desde `services/` (Linux, recomendado)**:
+2. **Instalar dependencias** (añade ddddocr/onnxruntime/opencv al venv del server):
+   `pip install -r consulta_titulos/requirements.txt`.
+   En Linux, opencv necesita: `apt-get install -y libgl1 libglib2.0-0`.
+3. **Arrancar el clasificador** (ya sirve también la consulta de títulos):
    ```bash
-   gunicorn -c consulta_titulos/gunicorn.conf.py consulta_titulos.main:app
+   gunicorn -c gunicorn.conf.py app.main:app          # o como ya lo despliegues
    ```
-   En Windows (sin gunicorn):
-   `uvicorn consulta_titulos.main:app --host 0.0.0.0 --port 8091 --workers 3`.
+
+> Alternativa **standalone** (servidor aparte, otro puerto):
+> `gunicorn -c consulta_titulos/gunicorn.conf.py consulta_titulos.main:app`
+> (Windows: `uvicorn consulta_titulos.main:app --host 0.0.0.0 --port 8091`).
 
 ### Notas de producción
 - **Redis es necesario** para que la caché funcione (sin él el servicio sigue

@@ -26,6 +26,10 @@ from app.views import (
     adm_cache, adm_consultas, adm_consumidores, adm_procesadores, adm_prompts,
     adm_rutas, documentos,
 )
+# La consulta de títulos SENESCYT corre EN EL MISMO servidor: se monta su router
+# (sus endpoints ya declaran su propia auth: consulta = clave válida, gestión de
+# caché = scope admin). Comparte commons (DB/Redis/api_keys) con el clasificador.
+from consulta_titulos.router import api as consulta_titulos_api, calentar_ocr
 
 app = FastAPI(
     title="Core de Clasificación - Universidad",
@@ -38,6 +42,13 @@ prompts.inicializar()
 rutas.inicializar()
 procesadores.inicializar()
 
+
+@app.on_event("startup")
+def _calentar_ocr_senescyt():
+    """Pre-carga el OCR (ddddocr) de la consulta de títulos al arrancar el worker."""
+    calentar_ocr()
+
+
 for view in (documentos, adm_prompts, adm_rutas, adm_procesadores, adm_consumidores,
              adm_cache, adm_consultas):
     app.include_router(
@@ -45,6 +56,9 @@ for view in (documentos, adm_prompts, adm_rutas, adm_procesadores, adm_consumido
         prefix="/api/v1",
         dependencies=[Depends(verificar_api_key)],
     )
+
+# Router de consulta de títulos (auth declarada por endpoint -> sin dep global aquí).
+app.include_router(consulta_titulos_api, prefix="/api/v1")
 
 for view in (adm_procesadores, adm_rutas, adm_consumidores, adm_consultas):
     app.include_router(view.paginas)

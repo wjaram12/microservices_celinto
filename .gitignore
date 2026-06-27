@@ -10,6 +10,9 @@ credentials.json
 __pycache__/
 *.pyc
 
+# Archivos de IDE
+.idea/
+
 # Logs del servidor
 *.log
 
