@@ -1,0 +1,13 @@
+# Secretos / configuración por entorno
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Artefactos locales
+*.pdf
+*.log

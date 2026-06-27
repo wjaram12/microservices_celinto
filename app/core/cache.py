@@ -22,39 +22,15 @@ sin tocar las de otros servicios.
 """
 import json
 import logging
-import threading
 from typing import Callable
 
 import redis
 
-from app.core.config import settings
+from commons.redis_cache import obtener_cliente as _obtener_cliente
 
 logger = logging.getLogger(__name__)
 
 PREFIJO = "clasificador:cache:"
-
-_cliente = None
-_cliente_lock = threading.Lock()
-
-
-def _obtener_cliente():
-    """
-    Cliente Redis compartido por el proceso, creado perezosamente en el primer
-    uso. Perezoso = seguro tras el fork de gunicorn (cada worker abre su propia
-    conexión), igual que el pool de PostgreSQL. Los timeouts cortos hacen que,
-    si Redis no responde, se degrade rápido en vez de colgar la petición.
-    """
-    global _cliente
-    if _cliente is None:
-        with _cliente_lock:
-            if _cliente is None:
-                _cliente = redis.Redis.from_url(
-                    settings.REDIS_URL,
-                    decode_responses=True,
-                    socket_connect_timeout=2,
-                    socket_timeout=2,
-                )
-    return _cliente
 
 
 class Cache:
