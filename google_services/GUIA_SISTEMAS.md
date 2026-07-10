@@ -59,12 +59,12 @@ Cabecera `X-API-Key` en toda petición. Cada sistema tiene su propia clave, y es
 **misma** que usa para el resto de servicios del clasificador (las claves se validan
 contra una tabla `api_keys` compartida): no necesitas una clave aparte para Google.
 
-| Operación | Scope |
-|---|---|
-| Consultar personas, sugerir correos, confirmar | `consumo` |
-| Crear cuentas, vincular, desvincular | `admin` |
+**Todo lo que describe esta guía funciona con una clave de scope `consumo`** —
+consultar, procesar, crear cuentas, vincular, gestionar miembros de grupos. El scope
+`admin` solo se exige en operaciones que no son de los sistemas cliente (el CRUD
+crudo de usuarios del Admin SDK y los diagnósticos internos), que no aparecen aquí.
 
-Sin clave → `401`. Con clave de consumo en un endpoint de administración → `403`.
+Sin clave o con clave inválida → `401`.
 
 Tu clave identifica a tu sistema: queda registrada como `consumidor` en cada cuenta
 que crees. Es la trazabilidad de quién dio de alta a quién.
@@ -77,7 +77,7 @@ Si lo que quieres es «resuelve esta persona y dime si quedó migrada», usa:
 
 ```http
 POST /api/v1/google-services/personas/procesar
-X-API-Key: wsk_...   (scope admin)
+X-API-Key: wsk_...
 ```
 
 ```json
@@ -272,7 +272,7 @@ antes de tocar Google.
 
 ```http
 POST /api/v1/google-services/personas/
-X-API-Key: wsk_...   (scope admin)
+X-API-Key: wsk_...
 ```
 
 ```json
@@ -522,7 +522,7 @@ cuenta se crea siempre con `changePasswordAtNextLogin`.
 | `200` | La persona ya tenía cuenta | Usar `correo`. Mirar `actualizar_en_origen`. |
 | `201` | Cuenta creada | Guardar `correo` y `password_inicial`. Confirmar. |
 | `400` | Cédula vacía, correo fuera del dominio, unidad o grupo inexistentes | Corregir la petición. |
-| `401` / `403` | Clave ausente, inválida, o sin scope `admin` | Revisar la API key. |
+| `401` | Clave ausente, inválida o revocada | Revisar la API key. |
 | `404` | La cuenta indicada no existe en Google | — |
 | `409` | Esa cuenta ya pertenece a otra cédula (homónimos) | Revisión humana. **No reintentar** |
 | `500` | El servicio no está bien configurado | Avisar a TI; no reintentar. |
@@ -536,22 +536,23 @@ que Google lleva minutos sin responder.
 
 ## Todos los endpoints
 
-| Método | Ruta | Scope | Para qué |
-|---|---|---|---|
-| `GET` | `/personas/{cedula}` | consumo | Cuentas de una persona. `?verificar=true` contrasta con Google |
-| `POST` | `/personas/procesar` | admin | **Audita, actúa y devuelve `migrado`.** El camino corto |
-| `POST` | `/personas/auditar` | consumo | Veredicto en vivo. Solo lee |
-| `POST` | `/personas/` | admin | Alta idempotente |
-| `GET` | `/personas/{cedula}/confirmar` | consumo | ¿Ya propagó la cuenta? |
-| `GET` | `/correos/sugerir` | consumo | Primera dirección libre |
-| `POST` | `/personas/{cedula}/vinculos` | admin | Vincular a mano una cuenta existente |
-| `DELETE` | `/personas/{cedula}/vinculos/{google_id}` | admin | Quitar el vínculo del índice |
-| `GET` | `/vinculos/estado` | admin | Cuántos vínculos y quién los registró |
-| `GET` | `/unidades/` | consumo | Árbol de unidades organizativas (valores válidos de `orgUnitPath`) |
-| `GET` | `/grupos/` | consumo | Grupos del dominio (valores válidos de `grupos`) |
-| `GET` | `/grupos/{grupo}/miembros` | consumo | Miembros de un grupo, con su rol |
-| `POST` | `/grupos/{grupo}/miembros` | admin | Añadir un miembro (idempotente) |
-| `DELETE` | `/grupos/{grupo}/miembros/{correo}` | admin | Quitar un miembro (idempotente) |
+Todos exigen una clave válida (scope `consumo` basta):
+
+| Método | Ruta | Para qué |
+|---|---|---|
+| `GET` | `/personas/{cedula}` | Cuentas de una persona. `?verificar=true` contrasta con Google |
+| `POST` | `/personas/procesar` | **Audita, actúa y devuelve `migrado`.** El camino corto |
+| `POST` | `/personas/auditar` | Veredicto en vivo. Solo lee |
+| `POST` | `/personas/` | Alta idempotente |
+| `GET` | `/personas/{cedula}/confirmar` | ¿Ya propagó la cuenta? |
+| `GET` | `/correos/sugerir` | Primera dirección libre |
+| `POST` | `/personas/{cedula}/vinculos` | Vincular a mano una cuenta existente |
+| `DELETE` | `/personas/{cedula}/vinculos/{google_id}` | Quitar el vínculo del índice |
+| `GET` | `/unidades/` | Árbol de unidades organizativas (valores válidos de `orgUnitPath`) |
+| `GET` | `/grupos/` | Grupos del dominio (valores válidos de `grupos`) |
+| `GET` | `/grupos/{grupo}/miembros` | Miembros de un grupo, con su rol |
+| `POST` | `/grupos/{grupo}/miembros` | Añadir un miembro (idempotente) |
+| `DELETE` | `/grupos/{grupo}/miembros/{correo}` | Quitar un miembro (idempotente) |
 
 Todas cuelgan de `/api/v1/google-services/` en la URL unificada del clasificador
 (ver [Dónde está el servicio](#dónde-está-el-servicio)).

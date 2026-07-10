@@ -6,8 +6,11 @@ Se expone como `api` para poder montarlo en DOS sitios:
 
 Capa HTTP delgada: traduce los errores de dominio del cliente a códigos HTTP. Cada
 endpoint declara su propia dependencia de auth, así funciona igual montado donde
-sea: LEER el directorio basta con una clave válida; ESCRIBIR en él (crear, mover,
-suspender, borrar cuentas, añadir a grupos) exige scope admin.
+sea: el flujo de los sistemas consumidores (leer el directorio, procesar/crear
+personas, vínculos, miembros de grupos) basta con una clave válida — es PARA los
+clientes, no deben necesitar una clave admin del clasificador. El scope admin queda
+para lo que no es de clientes: el CRUD crudo de usuarios (proxy del Admin SDK) y el
+diagnóstico de vínculos.
 
 SIN CACHÉ: toda petición consulta el Admin SDK en vivo. El directorio es la única
 fuente de verdad y una lista de grupos u OUs cacheada puede estar desactualizada
@@ -387,9 +390,8 @@ def _cuentas_por_cedula_en_google(cedula: str) -> list:
     return [u for u in hallados if _cedula_de(u) == cedula]
 
 
-@api.post("/google-services/personas/procesar", response_model=RespuestaProcesar,
-          dependencies=[Depends(requiere_admin)])
-def procesar_persona(datos: SolicitudProcesar, quien: dict = Depends(requiere_admin)):
+@api.post("/google-services/personas/procesar", response_model=RespuestaProcesar)
+def procesar_persona(datos: SolicitudProcesar, quien: dict = Depends(verificar_api_key)):
     """
     Audita a una persona y **actúa** según el veredicto. Devuelve `migrado`.
 
@@ -554,9 +556,9 @@ def procesar_persona(datos: SolicitudProcesar, quien: dict = Depends(requiere_ad
 
 
 @api.post("/google-services/personas/", response_model=RespuestaCrearPersona,
-          status_code=201, dependencies=[Depends(requiere_admin)])
+          status_code=201)
 def crear_persona(datos: SolicitudCrearPersona, respuesta: Response,
-                  quien: dict = Depends(requiere_admin)):
+                  quien: dict = Depends(verificar_api_key)):
     """
     Crea la cuenta de Google de una persona. **Idempotente por cédula.**
 
@@ -714,10 +716,9 @@ def confirmar_creacion(identificacion: str):
 
 
 @api.post("/google-services/personas/{identificacion}/vinculos",
-          response_model=RespuestaVinculo, status_code=201,
-          dependencies=[Depends(requiere_admin)])
+          response_model=RespuestaVinculo, status_code=201)
 def vincular(identificacion: str, datos: SolicitudVincular,
-             quien: dict = Depends(requiere_admin)):
+             quien: dict = Depends(verificar_api_key)):
     """
     Registra que una cuenta de Google pertenece a una persona.
 
@@ -761,7 +762,7 @@ def vincular(identificacion: str, datos: SolicitudVincular,
 
 
 @api.delete("/google-services/personas/{identificacion}/vinculos/{google_id}",
-            response_model=RespuestaVinculo, dependencies=[Depends(requiere_admin)])
+            response_model=RespuestaVinculo, dependencies=[Depends(verificar_api_key)])
 def desvincular(identificacion: str, google_id: str):
     """Borra el vínculo de la TABLA. No toca Google: para quitar la cédula de la
     cuenta hay que hacerlo explícitamente, y así un borrado accidental del índice no
@@ -891,7 +892,7 @@ def listar_miembros(email_grupo: str):
 
 
 @api.delete("/google-services/grupos/{email_grupo}/miembros/{email_usuario}",
-            response_model=RespuestaMiembro, dependencies=[Depends(requiere_admin)])
+            response_model=RespuestaMiembro, dependencies=[Depends(verificar_api_key)])
 def quitar_miembro(email_grupo: str, email_usuario: str):
     """Saca a un usuario de un grupo. Idempotente: si no era miembro responde 200 con
     status='no_era_miembro'."""
@@ -909,7 +910,7 @@ def quitar_miembro(email_grupo: str, email_usuario: str):
 
 
 @api.post("/google-services/grupos/{email_grupo}/miembros", response_model=RespuestaMiembro,
-          dependencies=[Depends(requiere_admin)])
+          dependencies=[Depends(verificar_api_key)])
 def agregar_miembro(email_grupo: str, datos: SolicitudAgregarMiembro):
     """Añade un usuario a un grupo. Idempotente: si ya era miembro responde 200 con
     status='ya_era_miembro'. Reintenta mientras Google propaga una cuenta recién creada."""

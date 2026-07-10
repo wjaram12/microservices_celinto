@@ -47,8 +47,9 @@ except Exception:
     _consulta_titulos_ok = False
 
 # Google Workspace corre EN EL MISMO servidor, con el mismo criterio: su router ya
-# declara la auth por endpoint (leer el directorio = clave válida, escribir en él =
-# scope admin) y comparte commons (Redis/api_keys).
+# declara la auth por endpoint (el flujo de los sistemas cliente = clave válida;
+# el CRUD crudo de usuarios y el diagnóstico = scope admin) y comparte commons
+# (Redis/api_keys).
 #
 # Import TOLERANTE A FALLOS, igual que arriba: si google-api-python-client no está
 # instalado, el clasificador arranca sin esas rutas en vez de no arrancar.

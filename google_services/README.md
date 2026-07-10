@@ -89,8 +89,10 @@ La regla que resume ambos: **la llave es la cédula, nunca el correo.**
 ## Endpoints
 
 Autenticación por cabecera `X-API-Key` (sistema de `commons`, tabla `api_keys`).
-**Leer** el directorio requiere una clave válida; **escribir** en él requiere scope
-`admin`.
+El **flujo de los sistemas cliente** (leer el directorio, procesar/crear personas,
+vínculos, miembros de grupos — todo lo de `GUIA_SISTEMAS.md`) requiere una clave
+válida (scope `consumo` basta). El scope `admin` queda para lo que no es de
+clientes: el **CRUD crudo de usuarios** (proxy del Admin SDK) y `GET /vinculos/estado`.
 
 | Método | Ruta | Auth | Qué hace |
 |---|---|---|---|
@@ -101,7 +103,7 @@ Autenticación por cabecera `X-API-Key` (sistema de `commons`, tabla `api_keys`)
 | `DELETE` | `/google-services/usuarios/{clave_usuario}` | admin | Elimina la cuenta (idempotente) |
 | `GET` | `/google-services/unidades/` | clave | Árbol de OUs |
 | `GET` | `/google-services/grupos/` | clave | Grupos del dominio |
-| `POST` | `/google-services/grupos/{email_grupo}/miembros` | admin | Añade un usuario al grupo (idempotente) |
+| `POST` | `/google-services/grupos/{email_grupo}/miembros` | clave | Añade un usuario al grupo (idempotente) |
 
 Montado en el clasificador, todas llevan el prefijo `/api/v1`.
 
