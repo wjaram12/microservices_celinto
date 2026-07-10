@@ -813,9 +813,6 @@ def sugerir_correo(
 @api.get("/google-services/vinculos/estado", response_model=RespuestaEstadoVinculos,
          dependencies=[Depends(verificar_api_key)])
 def estado_vinculos():
-    """Cuántos vínculos hay, cuántas personas, y quién los registró.
-
-    Clave válida (consumo) a propósito: los clientes lo usan como verificación
     try:
         r = vinculos.contar()
     except Exception as e:
@@ -913,8 +910,6 @@ def quitar_miembro(email_grupo: str, email_usuario: str):
 @api.post("/google-services/grupos/{email_grupo}/miembros", response_model=RespuestaMiembro,
           dependencies=[Depends(verificar_api_key)])
 def agregar_miembro(email_grupo: str, datos: SolicitudAgregarMiembro):
-    """Añade un usuario a un grupo. Idempotente: si ya era miembro responde 200 con
-    status='ya_era_miembro'. Reintenta mientras Google propaga una cuenta recién creada."""
     try:
         resultado = obtener_directorio().grupos.agregar_miembro(
             email_grupo, datos.email, datos.rol)
