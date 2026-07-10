@@ -33,16 +33,16 @@ def crear(consumidor: str, scope: str = "consumo") -> None:
     try:
         registro = consumidores.crear(consumidor, scope)
     except ValueError as e:
-        print(f"❌ {e}")
+        print(f"{e}")
         sys.exit(1)
 
     print(
-        f"✅ API key creada para '{registro['consumidor']}' "
+        f"API key creada para '{registro['consumidor']}' "
         f"(id {registro['id']}, scope {registro['scope']})."
     )
-    print("\n   Entrega esta clave al consumidor. NO se volverá a mostrar:\n")
+    print("\n Entrega esta clave al consumidor. NO se volverá a mostrar:\n")
     print(f"      {registro['llave']}\n")
-    print("   El consumidor debe enviarla en cada petición en la cabecera:")
+    print(" El consumidor debe enviarla en cada petición en la cabecera:")
     print(f"      X-API-Key: {registro['llave']}")
 
 
@@ -64,9 +64,9 @@ def listar() -> None:
 def revocar(identificador: str) -> None:
     n = consumidores.revocar(identificador)
     if n == 0:
-        print(f"⚠️  No se encontró ninguna clave activa para '{identificador}'.")
+        print(f"No se encontró ninguna clave activa para '{identificador}'.")
         sys.exit(1)
-    print(f"✅ {n} clave(s) revocada(s) para '{identificador}'.")
+    print(f"{n} clave(s) revocada(s) para '{identificador}'.")
 
 
 def main() -> None:

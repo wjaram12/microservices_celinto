@@ -31,8 +31,10 @@ services/
 
 ## Instalación
 
+Las dependencias de todo el repo viven en un único `services/requirements.txt`:
+
 ```bash
-pip install -r requirements.txt
+pip install -r requirements.txt   # desde services/
 ```
 
 > `ddddocr` arrastra `onnxruntime` (binario pesado). En Windows puede requerir el
@@ -138,7 +140,7 @@ la consulta de títulos viaja con él. El paquete `mock/` es **solo desarrollo**
    # DATABASE_URL y REDIS_URL ya están (se reutilizan tal cual).
    ```
 2. **Instalar dependencias** (añade ddddocr/onnxruntime/opencv al venv del server):
-   `pip install -r consulta_titulos/requirements.txt`.
+   `pip install -r requirements.txt` desde `services/`.
    En Linux, opencv (de ddddocr) necesita libs del sistema; si falta `libGL.so.1`:
    `sudo apt-get install -y libgl1 libglib2.0-0 libsm6 libxext6 libxrender1`
    (en Ubuntu viejos, `libgl1-mesa-glx` en vez de `libgl1`).

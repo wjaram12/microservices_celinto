@@ -36,16 +36,30 @@ logger = logging.getLogger(__name__)
 #
 # Import TOLERANTE A FALLOS: sus dependencias son pesadas (ddddocr/onnxruntime/
 # opencv). Si no están instaladas en el servidor, NO debe tumbar el clasificador:
-# se loguea y se arranca sin esas rutas (instala consulta_titulos/requirements.txt
-# para habilitarlas).
+# se loguea y se arranca sin esas rutas (instala requirements.txt para habilitarlas).
 try:
     from consulta_titulos.router import api as consulta_titulos_api, calentar_ocr
     _consulta_titulos_ok = True
 except Exception:
     logger.exception(
         "No se pudo cargar la consulta de títulos; el clasificador arranca SIN esas "
-        "rutas. Instala consulta_titulos/requirements.txt para habilitarlas.")
+        "rutas. Instala requirements.txt para habilitarlas.")
     _consulta_titulos_ok = False
+
+# Google Workspace corre EN EL MISMO servidor, con el mismo criterio: su router ya
+# declara la auth por endpoint (leer el directorio = clave válida, escribir en él =
+# scope admin) y comparte commons (Redis/api_keys).
+#
+# Import TOLERANTE A FALLOS, igual que arriba: si google-api-python-client no está
+# instalado, el clasificador arranca sin esas rutas en vez de no arrancar.
+try:
+    from google_services.router import api as google_services_api, verificar_credenciales
+    _google_services_ok = True
+except Exception:
+    logger.exception(
+        "No se pudo cargar Google Workspace; el clasificador arranca SIN esas rutas. "
+        "Instala requirements.txt para habilitarlas.")
+    _google_services_ok = False
 
 app = FastAPI(
     title="Core de Clasificación - Universidad",
@@ -66,6 +80,14 @@ if _consulta_titulos_ok:
         calentar_ocr()
 
 
+if _google_services_ok:
+    @app.on_event("startup")
+    def _verificar_credenciales_google():
+        """Comprueba el acceso al Admin SDK al arrancar. Best-effort: si falla, lo
+        registra y sigue; los endpoints de Google responderán 500 con el motivo."""
+        verificar_credenciales()
+
+
 for view in (documentos, adm_prompts, adm_rutas, adm_procesadores, adm_consumidores,
              adm_cache, adm_consultas):
     app.include_router(
@@ -78,6 +100,10 @@ for view in (documentos, adm_prompts, adm_rutas, adm_procesadores, adm_consumido
 # Solo si sus dependencias cargaron (ver import tolerante a fallos arriba).
 if _consulta_titulos_ok:
     app.include_router(consulta_titulos_api, prefix="/api/v1")
+
+# Router de Google Workspace (auth declarada por endpoint -> sin dep global aquí).
+if _google_services_ok:
+    app.include_router(google_services_api, prefix="/api/v1")
 
 for view in (adm_procesadores, adm_rutas, adm_consumidores, adm_consultas):
     app.include_router(view.paginas)

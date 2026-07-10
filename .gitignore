@@ -3,6 +3,11 @@
 # Secretos / credenciales — NUNCA subir al repo
 .env
 credentials.json
+google_workspace_sa.json
+# Clave del service account de Google. Se ignora por nombre en CUALQUIER carpeta:
+# ha aparecido copiada suelta más de una vez y basta un `git add .` para publicarla.
+account_service.json
+**/account_service.json
 *.json.key
 *.pem
 
@@ -12,6 +17,9 @@ __pycache__/
 
 # Archivos de IDE
 .idea/
+
+# Doc con API key real — NO subir al repo
+consulta_titulos/API.md
 
 # Logs del servidor
 *.log
