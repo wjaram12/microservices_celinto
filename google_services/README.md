@@ -92,7 +92,7 @@ Autenticación por cabecera `X-API-Key` (sistema de `commons`, tabla `api_keys`)
 El **flujo de los sistemas cliente** (leer el directorio, procesar/crear personas,
 vínculos, miembros de grupos — todo lo de `GUIA_SISTEMAS.md`) requiere una clave
 válida (scope `consumo` basta). El scope `admin` queda para lo que no es de
-clientes: el **CRUD crudo de usuarios** (proxy del Admin SDK) y `GET /vinculos/estado`.
+clientes: el **CRUD crudo de usuarios** (proxy del Admin SDK).
 
 | Método | Ruta | Auth | Qué hace |
 |---|---|---|---|

@@ -548,6 +548,7 @@ Todos exigen una clave válida (scope `consumo` basta):
 | `GET` | `/correos/sugerir` | Primera dirección libre |
 | `POST` | `/personas/{cedula}/vinculos` | Vincular a mano una cuenta existente |
 | `DELETE` | `/personas/{cedula}/vinculos/{google_id}` | Quitar el vínculo del índice |
+| `GET` | `/vinculos/estado` | Cuántos vínculos y quién los registró. Sirve de verificación previa de la clave |
 | `GET` | `/unidades/` | Árbol de unidades organizativas (valores válidos de `orgUnitPath`) |
 | `GET` | `/grupos/` | Grupos del dominio (valores válidos de `grupos`) |
 | `GET` | `/grupos/{grupo}/miembros` | Miembros de un grupo, con su rol |

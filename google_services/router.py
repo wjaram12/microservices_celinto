@@ -9,8 +9,7 @@ endpoint declara su propia dependencia de auth, así funciona igual montado dond
 sea: el flujo de los sistemas consumidores (leer el directorio, procesar/crear
 personas, vínculos, miembros de grupos) basta con una clave válida — es PARA los
 clientes, no deben necesitar una clave admin del clasificador. El scope admin queda
-para lo que no es de clientes: el CRUD crudo de usuarios (proxy del Admin SDK) y el
-diagnóstico de vínculos.
+para lo que no es de clientes: el CRUD crudo de usuarios (proxy del Admin SDK).
 
 SIN CACHÉ: toda petición consulta el Admin SDK en vivo. El directorio es la única
 fuente de verdad y una lista de grupos u OUs cacheada puede estar desactualizada
@@ -812,9 +811,11 @@ def sugerir_correo(
 
 
 @api.get("/google-services/vinculos/estado", response_model=RespuestaEstadoVinculos,
-         dependencies=[Depends(requiere_admin)])
+         dependencies=[Depends(verificar_api_key)])
 def estado_vinculos():
-    """Cuántos vínculos hay, cuántas personas, y quién los registró."""
+    """Cuántos vínculos hay, cuántas personas, y quién los registró.
+
+    Clave válida (consumo) a propósito: los clientes lo usan como verificación
     try:
         r = vinculos.contar()
     except Exception as e:
