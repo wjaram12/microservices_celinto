@@ -15,16 +15,23 @@ SIN CACHÉ: toda petición consulta el Admin SDK en vivo. El directorio es la ú
 fuente de verdad y una lista de grupos u OUs cacheada puede estar desactualizada
 justo cuando se necesita decidir sobre una cuenta. Se paga la latencia (~0,6 s al
 listar los grupos del dominio) a cambio de no servir nunca un dato viejo.
+
+CON LÍMITE DE TASA (commons.rate_limit): la cuota del Admin SDK (~2 400 req/min)
+la comparten los tres sistemas cliente, y ya se agotó una vez en producción. Cada
+ruta declara su categoría: `google` (consume cuota del Admin SDK, 600/min por API
+key) o `lectura` (índice local, ~2 ms, 3000/min). Redis se usa SOLO para ese
+contador; los datos de Google siguen sin cachearse.
 """
 import logging
 import secrets
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
+from commons.rate_limit import limitar_tasa
 from commons.seguridad import requiere_admin, verificar_api_key
 
 from . import auditoria, nomenclatura
-from .cliente import obtener_directorio
+from .cliente import entrada_external_id, obtener_directorio
 from .config import settings
 from .errores import (
     ErrorDeConfiguracion, ErrorDeConflicto, ErrorDeGoogle, ErrorDeValidacion,
@@ -44,6 +51,12 @@ from .vinculos import vinculos
 logger = logging.getLogger(__name__)
 
 api = APIRouter(tags=["Google Workspace"])
+
+# Ambas dependencias AUTENTICAN (componen verificar_api_key) y además cuentan la
+# petición contra el límite de su categoría. En rutas admin van DESPUÉS de
+# requiere_admin: el 403 gana al 429.
+limite_google = Depends(limitar_tasa("google"))    # consume cuota del Admin SDK
+limite_lectura = Depends(limitar_tasa("lectura"))  # solo el índice local (PostgreSQL)
 
 
 def verificar_credenciales() -> None:
@@ -89,7 +102,7 @@ def _traducir(e: Exception) -> HTTPException:
 # --------------------------------------------------------------------------- #
 
 @api.get("/google-services/usuarios/", response_model=RespuestaListaUsuarios,
-         dependencies=[Depends(verificar_api_key)])
+         dependencies=[limite_google])
 def listar_usuarios(
     consulta: str = Query("", description="Filtro con la sintaxis del Admin SDK, "
                                           "p. ej. `email:juan*` u `orgUnitPath=/Docentes`."),
@@ -111,7 +124,7 @@ def listar_usuarios(
 
 
 @api.get("/google-services/usuarios/{clave_usuario}", response_model=RespuestaUsuario,
-         dependencies=[Depends(verificar_api_key)])
+         dependencies=[limite_google])
 def obtener_usuario(clave_usuario: str):
     """Datos de un usuario por su correo o su ID de Google. 404 si no existe."""
     try:
@@ -132,7 +145,7 @@ def obtener_usuario(clave_usuario: str):
 
 
 @api.post("/google-services/usuarios/", response_model=RespuestaUsuario, status_code=201,
-          dependencies=[Depends(requiere_admin)])
+          dependencies=[Depends(requiere_admin), limite_google])
 def crear_usuario(datos: SolicitudCrearUsuario):
     """
     Crea una cuenta en el dominio y la ubica en su unidad organizativa.
@@ -167,7 +180,7 @@ def crear_usuario(datos: SolicitudCrearUsuario):
 
 
 @api.patch("/google-services/usuarios/{clave_usuario}", response_model=RespuestaUsuario,
-           dependencies=[Depends(requiere_admin)])
+           dependencies=[Depends(requiere_admin), limite_google])
 def actualizar_usuario(clave_usuario: str, datos: SolicitudActualizarUsuario):
     """Actualiza los campos enviados de un usuario (los omitidos no se tocan).
     Sirve, entre otras cosas, para resetear la contraseña o suspender la cuenta."""
@@ -190,7 +203,7 @@ def actualizar_usuario(clave_usuario: str, datos: SolicitudActualizarUsuario):
 
 
 @api.delete("/google-services/usuarios/{clave_usuario}", response_model=RespuestaEliminacion,
-            dependencies=[Depends(requiere_admin)])
+            dependencies=[Depends(requiere_admin), limite_google])
 def eliminar_usuario(clave_usuario: str):
     """Elimina una cuenta del dominio. Si no existía responde 200 con
     status='no_encontrado' (la operación es idempotente)."""
@@ -225,7 +238,7 @@ def _cedula_de(usuario: dict):
 
 
 @api.get("/google-services/personas/{identificacion}", response_model=RespuestaPersona,
-         dependencies=[Depends(verificar_api_key)])
+         dependencies=[limite_lectura])
 def obtener_persona(
     identificacion: str,
     verificar: bool = Query(
@@ -309,7 +322,7 @@ ACCIONES = {
 
 
 @api.post("/google-services/personas/auditar", response_model=RespuestaAuditar,
-          dependencies=[Depends(verificar_api_key)])
+          dependencies=[limite_google])
 def auditar_persona(datos: SolicitudAuditar):
     """
     Veredicto sobre una persona frente a Google. **Solo lee: no crea ni modifica nada.**
@@ -389,7 +402,8 @@ def _cuentas_por_cedula_en_google(cedula: str) -> list:
     return [u for u in hallados if _cedula_de(u) == cedula]
 
 
-@api.post("/google-services/personas/procesar", response_model=RespuestaProcesar)
+@api.post("/google-services/personas/procesar", response_model=RespuestaProcesar,
+          dependencies=[limite_google])
 def procesar_persona(datos: SolicitudProcesar, quien: dict = Depends(verificar_api_key)):
     """
     Audita a una persona y **actúa** según el veredicto. Devuelve `migrado`.
@@ -526,8 +540,12 @@ def procesar_persona(datos: SolicitudProcesar, quien: dict = Depends(verificar_a
                 "password": password,
                 "changePasswordAtNextLogin": True,
                 "orgUnitPath": datos.orgUnitPath,
+                # La cédula viaja DENTRO del insert: una cuenta recién nacida no tiene
+                # externalIds que preservar, así que el read-modify-write sobra. Escribirla
+                # aparte forzaba un users.get que devolvía 404 por la propagación de Google
+                # (502 con la cuenta ya creada). En el insert es atómico: nace con su cédula.
+                "externalIds": [entrada_external_id(cedula, "identificacion")],
             })
-            directorio.usuarios.establecer_external_id(nueva["id"], cedula, "identificacion")
             for grupo in datos.grupos:
                 try:
                     directorio.grupos.agregar_miembro(grupo, correo)
@@ -555,7 +573,7 @@ def procesar_persona(datos: SolicitudProcesar, quien: dict = Depends(verificar_a
 
 
 @api.post("/google-services/personas/", response_model=RespuestaCrearPersona,
-          status_code=201)
+          status_code=201, dependencies=[limite_google])
 def crear_persona(datos: SolicitudCrearPersona, respuesta: Response,
                   quien: dict = Depends(verificar_api_key)):
     """
@@ -634,10 +652,12 @@ def crear_persona(datos: SolicitudCrearPersona, respuesta: Response,
                 "password": password,
                 "changePasswordAtNextLogin": True,
                 "orgUnitPath": datos.orgUnitPath,
+                # La cédula, en Google, para que el vínculo viaje con la cuenta. Va DENTRO
+                # del insert (no un read-modify-write aparte): una cuenta nueva no tiene
+                # externalIds que preservar, y así se elimina la ventana de propagación que
+                # devolvía 502 con la cuenta ya creada. Nace atómicamente con su cédula.
+                "externalIds": [entrada_external_id(cedula, "identificacion")],
             })
-
-            # La cédula, en Google, para que el vínculo viaje con la cuenta.
-            usuarios.establecer_external_id(cuenta["id"], cedula, "identificacion")
 
             # Los grupos toleran el 404 de propagación (el usuario acaba de nacer).
             grupos_asignados = []
@@ -674,7 +694,7 @@ def crear_persona(datos: SolicitudCrearPersona, respuesta: Response,
 
 
 @api.get("/google-services/personas/{identificacion}/confirmar",
-         response_model=RespuestaConfirmacion, dependencies=[Depends(verificar_api_key)])
+         response_model=RespuestaConfirmacion, dependencies=[limite_google])
 def confirmar_creacion(identificacion: str):
     """
     Comprueba que una cuenta recién creada ya está operativa en Google.
@@ -715,7 +735,8 @@ def confirmar_creacion(identificacion: str):
 
 
 @api.post("/google-services/personas/{identificacion}/vinculos",
-          response_model=RespuestaVinculo, status_code=201)
+          response_model=RespuestaVinculo, status_code=201,
+          dependencies=[limite_google])
 def vincular(identificacion: str, datos: SolicitudVincular,
              quien: dict = Depends(verificar_api_key)):
     """
@@ -761,7 +782,7 @@ def vincular(identificacion: str, datos: SolicitudVincular,
 
 
 @api.delete("/google-services/personas/{identificacion}/vinculos/{google_id}",
-            response_model=RespuestaVinculo, dependencies=[Depends(verificar_api_key)])
+            response_model=RespuestaVinculo, dependencies=[limite_lectura])
 def desvincular(identificacion: str, google_id: str):
     """Borra el vínculo de la TABLA. No toca Google: para quitar la cédula de la
     cuenta hay que hacerlo explícitamente, y así un borrado accidental del índice no
@@ -778,7 +799,7 @@ def desvincular(identificacion: str, google_id: str):
 
 
 @api.get("/google-services/correos/sugerir", response_model=RespuestaCorreoSugerido,
-         dependencies=[Depends(verificar_api_key)])
+         dependencies=[limite_google])
 def sugerir_correo(
     nombres: str = Query(description="Nombres de pila, p. ej. 'JOSE NICOLAS'."),
     apellidos: str = Query(description="Apellidos, p. ej. 'CABALLERO FRANCO'."),
@@ -811,7 +832,7 @@ def sugerir_correo(
 
 
 @api.get("/google-services/vinculos/estado", response_model=RespuestaEstadoVinculos,
-         dependencies=[Depends(verificar_api_key)])
+         dependencies=[limite_lectura])
 def estado_vinculos():
     try:
         r = vinculos.contar()
@@ -829,7 +850,7 @@ def estado_vinculos():
 # --------------------------------------------------------------------------- #
 
 @api.get("/google-services/unidades/", response_model=RespuestaUnidades,
-         dependencies=[Depends(verificar_api_key)])
+         dependencies=[limite_google])
 def listar_unidades():
     """Árbol de unidades organizativas del dominio, ordenado por ruta. Consulta
     Google en vivo en cada petición."""
@@ -848,7 +869,7 @@ def listar_unidades():
 
 
 @api.get("/google-services/grupos/", response_model=RespuestaGrupos,
-         dependencies=[Depends(verificar_api_key)])
+         dependencies=[limite_google])
 def listar_grupos():
     """Grupos del dominio (correo y nombre), ordenados por correo. Consulta Google
     en vivo en cada petición; con muchos grupos tarda ~0,6 s por la paginación."""
@@ -867,7 +888,7 @@ def listar_grupos():
 
 
 @api.get("/google-services/grupos/{email_grupo}/miembros", response_model=RespuestaMiembros,
-         dependencies=[Depends(verificar_api_key)])
+         dependencies=[limite_google])
 def listar_miembros(email_grupo: str):
     """Miembros de un grupo, con su rol. 404 si el grupo no existe (distinto de un
     grupo que existe pero está vacío, que devuelve una lista vacía)."""
@@ -890,7 +911,7 @@ def listar_miembros(email_grupo: str):
 
 
 @api.delete("/google-services/grupos/{email_grupo}/miembros/{email_usuario}",
-            response_model=RespuestaMiembro, dependencies=[Depends(verificar_api_key)])
+            response_model=RespuestaMiembro, dependencies=[limite_google])
 def quitar_miembro(email_grupo: str, email_usuario: str):
     """Saca a un usuario de un grupo. Idempotente: si no era miembro responde 200 con
     status='no_era_miembro'."""
@@ -908,7 +929,7 @@ def quitar_miembro(email_grupo: str, email_usuario: str):
 
 
 @api.post("/google-services/grupos/{email_grupo}/miembros", response_model=RespuestaMiembro,
-          dependencies=[Depends(verificar_api_key)])
+          dependencies=[limite_google])
 def agregar_miembro(email_grupo: str, datos: SolicitudAgregarMiembro):
     try:
         resultado = obtener_directorio().grupos.agregar_miembro(

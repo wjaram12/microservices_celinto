@@ -5,7 +5,8 @@ El campo común que esta app usa (DATABASE_URL, para el sistema de API keys) lo
 aporta commons.config.ConfigComun; aquí solo se añade lo propio del Admin SDK.
 Todas las apps leen el mismo services/.env.
 
-Esta app NO usa Redis: cada consulta va al Admin SDK en vivo, sin caché.
+Esta app usa Redis SOLO para el limitador de tasa (commons.rate_limit, campos
+RATE_LIMIT_* de ConfigComun): cada consulta va al Admin SDK en vivo, sin caché.
 
 El único secreto es el JSON del service account: NO va en el .env, va en un archivo
 aparte (gitignorado) cuya ruta se configura con GOOGLE_SA_FILE. Ver .env.example.

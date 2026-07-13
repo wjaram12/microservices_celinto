@@ -22,6 +22,13 @@ class ConfigComun(BaseSettings):
     DATABASE_URL: str
     REDIS_URL: str = "redis://localhost:6379/0"
 
+    # Límite de tasa por API key (commons.rate_limit). Peticiones por minuto y POR
+    # consumidor, contadas en Redis (globales entre workers y contextos de montaje).
+    # RATE_LIMIT_ACTIVO=false lo apaga; 0 en una categoría = esa sin límite.
+    RATE_LIMIT_ACTIVO: bool = True
+    RATE_LIMIT_GOOGLE_POR_MINUTO: int = 600    # endpoints que consumen cuota del Admin SDK
+    RATE_LIMIT_LECTURA_POR_MINUTO: int = 3000  # lecturas del índice local (PostgreSQL)
+
     model_config = SettingsConfigDict(
         env_file=_ENV_FILE,
         env_file_encoding="utf-8",

@@ -61,8 +61,12 @@ contra una tabla `api_keys` compartida): no necesitas una clave aparte para Goog
 
 **Todo lo que describe esta guía funciona con una clave de scope `consumo`** —
 consultar, procesar, crear cuentas, vincular, gestionar miembros de grupos. El scope
-`admin` solo se exige en operaciones que no son de los sistemas cliente (el CRUD
-crudo de usuarios del Admin SDK y los diagnósticos internos), que no aparecen aquí.
+`admin` solo se exige en el CRUD crudo de usuarios del Admin SDK, que no es para los
+sistemas cliente y no aparece aquí.
+
+Si quieres comprobar tu clave antes de lanzar un proceso, llama a
+`GET /api/v1/google-services/vinculos/estado`: si responde `200`, esa clave sirve
+para todo el flujo de esta guía.
 
 Sin clave o con clave inválida → `401`.
 
@@ -319,6 +323,11 @@ nomenclatura y se te avisa.
 }
 ```
 
+> La cédula se escribe **dentro de la propia creación** de la cuenta, en un único paso
+> atómico. Una cuenta creada **siempre** lleva su cédula: no hay un segundo paso posterior
+> que pueda fallar y dejarla «a medias». Por eso un alta o se completa entera (`201`) o no
+> ocurre (ver `502` más abajo), pero nunca queda una cuenta sin cédula.
+
 ### 4. Confirmar
 
 ```http
@@ -333,6 +342,10 @@ GET /api/v1/google-services/personas/0954778106/confirmar
 después de escribir: lo medimos en producción, la lectura inmediata tras crear no
 mostraba el cambio y tres segundos después sí. Si tratas eso como un fallo,
 concluirás que el alta no funcionó y crearás la cuenta otra vez.
+
+Como la cédula se escribe junto con la cuenta, `existe_en_google` y `cedula_registrada`
+propagan a la vez: cuando la cuenta aparezca, ya llevará su cédula. No verás una operativa
+sin la otra.
 
 Reintenta cada 2 segundos, hasta unos 30. Si sigue en `propagando`, escala.
 
@@ -472,6 +485,21 @@ La cuota del Admin SDK es de unas **2 400 peticiones por minuto**, y **la compar
 los tres sistemas**. No es teórica: durante la migración masiva la agotamos y 159
 cuentas fallaron.
 
+Por eso el servicio ahora **impone el reparto**: cada API key tiene un límite de
+**600 peticiones/minuto** en los endpoints que van a Google (procesar, auditar,
+altas, grupos...) y **3 000/minuto** en las lecturas del índice local
+(`GET /personas/{cedula}`, `GET /vinculos/estado`). Al superarlo recibes **`429`**
+con la cabecera `Retry-After` (segundos que faltan para que se abra la ventana).
+El límite es por API key y global: da igual con cuántos hilos o desde cuántas
+máquinas llames, cuentan juntas.
+
+Toda respuesta trae `X-RateLimit-Limit` y `X-RateLimit-Remaining`: úsalas para
+autoregular tu ritmo en vez de esperar al `429`.
+
+> `GET /personas/{cedula}` con `?verificar=true` sí consulta Google (una llamada
+> por cuenta), aunque cuenta contra el límite holgado de lectura. No lo uses en
+> bucle con `verificar`.
+
 - Procesa en **serie**, o con 4-8 hilos como mucho.
 - Si recibes muchos `502`, baja el ritmo: el servicio ya reintenta internamente hasta
   6 veces con esperas de 10, 20, 40 y 75 segundos, así que un `502` significa que
@@ -525,6 +553,7 @@ cuenta se crea siempre con `changePasswordAtNextLogin`.
 | `401` | Clave ausente, inválida o revocada | Revisar la API key. |
 | `404` | La cuenta indicada no existe en Google | — |
 | `409` | Esa cuenta ya pertenece a otra cédula (homónimos) | Revisión humana. **No reintentar** |
+| `429` | Tu sistema superó su límite de peticiones por minuto | Esperar los segundos de la cabecera `Retry-After` y reintentar. |
 | `500` | El servicio no está bien configurado | Avisar a TI; no reintentar. |
 | `502` | Google falló o agotó la cuota | **Reintentar** con espera creciente. |
 
@@ -532,31 +561,42 @@ Un `502` es transitorio. El servicio ya reintenta internamente (hasta 6 veces an
 cuota agotada, con esperas de 10, 20, 40 y 75 segundos), así que un `502` significa
 que Google lleva minutos sin responder.
 
+En un **alta**, un `502` significa que la cuenta **no llegó a crearse** (el alta es
+atómica: o entra entera con su cédula, o no entra). Por eso el reintento es seguro y
+**nunca crea un duplicado**: el servicio reconoce a la persona por su cédula, así que un
+segundo intento sobre alguien que sí quedó creado responde `200 ya_existia`, no una
+cuenta nueva. No hay un `502` que oculte una cuenta creada a medias.
+
 ---
 
 ## Todos los endpoints
 
 Todos exigen una clave válida (scope `consumo` basta):
 
-| Método | Ruta | Para qué |
-|---|---|---|
-| `GET` | `/personas/{cedula}` | Cuentas de una persona. `?verificar=true` contrasta con Google |
-| `POST` | `/personas/procesar` | **Audita, actúa y devuelve `migrado`.** El camino corto |
-| `POST` | `/personas/auditar` | Veredicto en vivo. Solo lee |
-| `POST` | `/personas/` | Alta idempotente |
-| `GET` | `/personas/{cedula}/confirmar` | ¿Ya propagó la cuenta? |
-| `GET` | `/correos/sugerir` | Primera dirección libre |
-| `POST` | `/personas/{cedula}/vinculos` | Vincular a mano una cuenta existente |
-| `DELETE` | `/personas/{cedula}/vinculos/{google_id}` | Quitar el vínculo del índice |
-| `GET` | `/vinculos/estado` | Cuántos vínculos y quién los registró. Sirve de verificación previa de la clave |
-| `GET` | `/unidades/` | Árbol de unidades organizativas (valores válidos de `orgUnitPath`) |
-| `GET` | `/grupos/` | Grupos del dominio (valores válidos de `grupos`) |
-| `GET` | `/grupos/{grupo}/miembros` | Miembros de un grupo, con su rol |
-| `POST` | `/grupos/{grupo}/miembros` | Añadir un miembro (idempotente) |
-| `DELETE` | `/grupos/{grupo}/miembros/{correo}` | Quitar un miembro (idempotente) |
+| Método | Ruta | Para qué | Límite/min |
+|---|---|---|---|
+| `GET` | `/personas/{cedula}` | Cuentas de una persona. `?verificar=true` contrasta con Google | 3 000 |
+| `POST` | `/personas/procesar` | **Audita, actúa y devuelve `migrado`.** El camino corto | 600 |
+| `POST` | `/personas/auditar` | Veredicto en vivo. Solo lee | 600 |
+| `POST` | `/personas/` | Alta idempotente | 600 |
+| `GET` | `/personas/{cedula}/confirmar` | ¿Ya propagó la cuenta? | 600 |
+| `GET` | `/correos/sugerir` | Primera dirección libre | 600 |
+| `POST` | `/personas/{cedula}/vinculos` | Vincular a mano una cuenta existente | 600 |
+| `DELETE` | `/personas/{cedula}/vinculos/{google_id}` | Quitar el vínculo del índice | 3 000 |
+| `GET` | `/vinculos/estado` | Cuántos vínculos y quién los registró. Sirve de verificación previa de la clave | 3 000 |
+| `GET` | `/unidades/` | Árbol de unidades organizativas (valores válidos de `orgUnitPath`) | 600 |
+| `GET` | `/grupos/` | Grupos del dominio (valores válidos de `grupos`) | 600 |
+| `GET` | `/grupos/{grupo}/miembros` | Miembros de un grupo, con su rol | 600 |
+| `POST` | `/grupos/{grupo}/miembros` | Añadir un miembro (idempotente) | 600 |
+| `DELETE` | `/grupos/{grupo}/miembros/{correo}` | Quitar un miembro (idempotente) | 600 |
 
 Todas cuelgan de `/api/v1/google-services/` en la URL unificada del clasificador
 (ver [Dónde está el servicio](#dónde-está-el-servicio)).
+
+La columna **Límite/min** es el cupo por API key de cada endpoint (ver
+[Ritmo y cuota](#4-ritmo-y-cuota)): **600/min** los que consultan Google, **3 000/min**
+los que solo leen el índice local. `/personas/{cedula}` cuenta siempre contra el
+cupo holgado de lectura, también con `?verificar=true`.
 
 ---
 

@@ -47,6 +47,13 @@ _RAIZ = Path(__file__).resolve().parent.parent
 REINTENTABLES = (429, 500, 503)
 
 
+def entrada_external_id(valor: str, tipo: str) -> dict:
+    """Una entrada del array `externalIds` de la Directory API, en el formato que
+    aceptan tanto `users.insert` como `users.patch`: `customType` libre y
+    `type='custom'`. Centraliza esa forma de cable en un solo sitio."""
+    return {"value": valor, "type": "custom", "customType": tipo}
+
+
 def _es_cuota(e: HttpError) -> bool:
     """¿Es un 403 de límite de cuota y no de permisos?
 
@@ -256,7 +263,7 @@ class ServicioUsuarios:
             self.actualizar(clave_usuario, {"externalIds": existentes})
             return "corregido"
 
-        existentes.append({"value": valor, "type": "custom", "customType": tipo})
+        existentes.append(entrada_external_id(valor, tipo))
         self.actualizar(clave_usuario, {"externalIds": existentes})
         return "insertado"
 
