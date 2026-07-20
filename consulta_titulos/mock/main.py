@@ -81,7 +81,13 @@ def get_captcha(request: Request):
     png, texto = captcha_mod.generar()
     with _lock:
         estado["captcha"] = texto
-    resp = Response(content=png, media_type="image/png")
+    # El portal REAL sirve /Captcha.jpg con HTTP 200 pero SIN cabecera
+    # Content-Type. Reproducimos esa peculiaridad (no fijamos media_type y
+    # quitamos el header) para que el mock ejercite la validación por bytes
+    # mágicos del scraper (ver SenescytScraper.refrescar_captcha).
+    resp = Response(content=png)
+    if "content-type" in resp.headers:
+        del resp.headers["content-type"]
     resp.set_cookie(COOKIE, sid, httponly=True)
     return resp
 

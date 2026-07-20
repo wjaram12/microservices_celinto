@@ -146,8 +146,20 @@ class SenescytScraper:
                 f"No se pudo conectar con SENESCYT para refrescar el captcha: {e}"
             ) from e
 
+        # El portal real sirve /Captcha.jpg con HTTP 200 pero SIN cabecera
+        # Content-Type (queda ""), así que validar solo por Content-Type rechaza
+        # captchas válidos. Validamos por los bytes mágicos de la imagen y usamos
+        # el Content-Type como refuerzo. Si el captcha estuviera caído, el portal
+        # devolvería un HTML/JSON de error y estos magic bytes no coincidirían.
         ct = cap.headers.get("Content-Type", "").lower()
-        if cap.status_code != 200 or "image" not in ct:
+        contenido = cap.content or b""
+        es_imagen = (
+            "image" in ct
+            or contenido[:3] == b"\xff\xd8\xff"           # JPEG
+            or contenido[:8] == b"\x89PNG\r\n\x1a\n"       # PNG
+            or contenido[:6] in (b"GIF87a", b"GIF89a")     # GIF
+        )
+        if cap.status_code != 200 or not es_imagen:
             raise SenescytScraperError(
                 "El servicio de captcha de SENESCYT no está disponible en este "
                 f"momento (HTTP {cap.status_code}). Es un problema temporal de "
@@ -155,8 +167,8 @@ class SenescytScraper:
             )
 
         return {
-            "captcha_b64": base64.b64encode(cap.content).decode("ascii"),
-            "captcha_mime": cap.headers.get("Content-Type", "image/jpeg"),
+            "captcha_b64": base64.b64encode(contenido).decode("ascii"),
+            "captcha_mime": ct if "image" in ct else "image/jpeg",
         }
 
     def consultar(self, captcha, identificacion="", apellidos=""):
