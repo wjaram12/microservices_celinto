@@ -273,8 +273,11 @@ apareciendo aquí; para comprobarla, `/personas/{cedula}/confirmar`.
 el `consumidor` que envíe se ignora y manda el de su clave. La clave admin las ve
 todas. El filtro realmente aplicado vuelve en `filtros`.
 
-Para separar lo que creó la API: `?origen=creacion`. Ojo con la siembra —
-`sincronizar_vinculos.py` escribe `origen='sincronizacion'` con
+Para separar lo que creó la API: `?origen=creacion`. **No incluye** las cuentas que
+ya existían y solo recibieron la cédula: esas son `?origen=vinculacion`. Sumar las dos
+da "cuentas sobre las que la API actuó", que es otra pregunta.
+
+Ojo con la siembra — `sincronizar_vinculos.py` escribe `origen='sincronizacion'` con
 `consumidor='backfill'`, **no** `origen='backfill'`, así que el backfill se aísla por
 consumidor, no por origen.
 
@@ -285,7 +288,8 @@ defecto 30) acota el desglose diario. Devuelve:
 
 - `por_origen` — cuentas y personas por `(origen, consumidor)`, con la primera y la
   última fecha de alta. Aquí se lee de un vistazo cuántas creó la API (`creacion`)
-  frente a las que solo adoptó (`sincronizacion`) o sembró el backfill.
+  frente a las que solo adoptó (`vinculacion`, `sincronizacion`) o sembró el backfill.
+  Las dos primeras estuvieron mezcladas bajo `creacion` hasta el 2026-08-19.
 - `por_dia` — altas por día dentro de la ventana.
 - `anomalias` — filas con defectos **de forma**, con hasta cinco ejemplos cada una:
   `correo_vacio`, `dominio_ajeno`, `sin_google_id`, `cedula_de_relleno`,

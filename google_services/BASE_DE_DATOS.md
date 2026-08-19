@@ -82,7 +82,7 @@ vez y tener dos cuentas. Por eso la clave es el par `(identificacion, google_id)
 | `ou` | Unidad organizativa de la cuenta, p. ej. `/Academico/Docentes`. Es lo que distingue las dos cuentas de una misma persona. |
 | `principal` | Cuál de sus cuentas es la principal. **Como mucho una por persona** (lo garantiza un índice único parcial). |
 | `consumidor` | Qué sistema la registró: `ucgone`, `posgrados`, `sga`, `backfill`. Sale de la API key. |
-| `origen` | `backfill` · `creacion` · `sincronizacion` · `manual`. |
+| `origen` | Cómo entró el vínculo. `creacion` = la API creó la cuenta en Google. `vinculacion` = la cuenta ya existía y la API solo le escribió la cédula. `sincronizacion` = ya existía y ya llevaba su cédula. `backfill` = la sembró la migración masiva. `manual` = la vinculó una persona por la API. **Ojo:** hasta el 2026-08-19 `vinculacion` no existía y esas filas se guardaron como `creacion`; `migrar_origen_vinculacion.py` las separa. |
 | `creado_en` | Cuándo se registró. Un reintento **no** lo cambia: quien la registró primero es quien la creó. |
 | `actualizado_en` | Última vez que cambió el correo o la unidad. |
 

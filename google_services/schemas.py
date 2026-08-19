@@ -374,8 +374,11 @@ class RespuestaResumenVinculos(BaseModel):
     personas: int = 0
     por_origen: List[dict] = Field(
         default=[], description="Cuentas y personas por (origen, consumidor), con la "
-                                "primera y la última fecha. `origen='creacion'` son "
-                                "las cuentas que la API creó en Google.")
+                                "primera y la última fecha. `creacion` son las cuentas "
+                                "que la API creó en Google; `vinculacion`, las que ya "
+                                "existían y solo recibieron la cédula. No sumarlas como "
+                                "'creadas': hasta el 2026-08-19 iban juntas bajo "
+                                "`creacion`.")
     por_dia: List[dict] = Field(
         default=[], description="Altas por día dentro de la ventana pedida.")
     anomalias: List[dict] = Field(

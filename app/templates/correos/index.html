@@ -18,7 +18,8 @@
       <select id="c-origen">
         <option value="">Todos</option>
         <option value="creacion">creacion — la API creó la cuenta</option>
-        <option value="sincronizacion">sincronizacion — ya existía y se adoptó</option>
+        <option value="vinculacion">vinculacion — ya existía; la API le puso la cédula</option>
+        <option value="sincronizacion">sincronizacion — ya existía y ya tenía cédula</option>
         <option value="manual">manual — vinculada a mano</option>
         <option value="backfill">backfill</option>
       </select>
@@ -44,7 +45,8 @@
   <div class="acciones">
     <button class="btn-principal" onclick="aplicarFiltros()">🔍 Buscar</button>
     <button class="btn-texto" onclick="limpiarFiltros()">Limpiar</button>
-    <button class="btn-suave" onclick="descargarReporte()">⬇️ Descargar CSV</button>
+    <button class="btn-suave" onclick="descargarReporte('csv')">⬇️ Descargar CSV</button>
+    <button class="btn-suave" onclick="descargarReporte('xlsx')">⬇️ Descargar Excel</button>
     <span class="meta" id="c-alcance"></span>
   </div>
 </div>
@@ -105,8 +107,13 @@
   .paginacion { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 14px; flex-wrap: wrap; }
   .paginacion button:disabled { opacity: .4; cursor: default; }
 
-  /* Un color por origen: distingue de un vistazo lo que creó la API de lo sembrado. */
+  /* Un color por origen: distingue de un vistazo lo que creó la API de lo sembrado.
+     `vinculacion` va CONTORNEADA en la familia de `creacion`: mismo color de texto
+     (la API intervino sobre la cuenta) pero sin relleno, porque la cuenta ya existía.
+     El color nunca es el único canal: la etiqueta lleva escrito su propio origen. */
   .etiqueta.creacion { background: var(--md-exito-container); color: var(--md-on-exito-container); }
+  .etiqueta.vinculacion { background: var(--md-surface); color: var(--md-on-exito-container);
+                          box-shadow: inset 0 0 0 1px var(--md-outline); }
   .etiqueta.sincronizacion { background: var(--md-secondary-container); color: var(--md-on-secondary-container); }
   .etiqueta.manual { background: var(--md-primary-container); color: var(--md-on-primary-container); }
   .etiqueta.backfill { background: var(--md-surface-container-high); color: var(--md-on-surface-variant); }
@@ -152,7 +159,11 @@ async function cargarResumen() {
   if (!ok) return;
   const porOrigen = cuerpo.por_origen || [];
   const suma = clave_ => porOrigen.filter(f => f.origen === clave_).reduce((t, f) => t + f.cuentas, 0);
+  // Creadas y adoptadas, por separado: una cuenta que ya existía y solo recibió la
+  // cédula NO es una cuenta creada. Iban juntas bajo `creacion` hasta el 2026-08-19.
   const creadas = suma("creacion");
+  const vinculadas = suma("vinculacion");
+  const yaExistian = suma("sincronizacion") + suma("backfill") + vinculadas;
   const anomalias = cuerpo.anomalias || [];
   const totalAnomalias = anomalias.reduce((t, a) => t + a.filas, 0);
 
@@ -163,9 +174,10 @@ async function cargarResumen() {
     <div class="tile"><div class="cifra">${creadas.toLocaleString("es-EC")}</div>
       <div class="rotulo">Creadas por la API</div>
       <div class="pie">origen <code>creacion</code></div></div>
-    <div class="tile"><div class="cifra">${suma("sincronizacion").toLocaleString("es-EC")}</div>
+    <div class="tile"><div class="cifra">${yaExistian.toLocaleString("es-EC")}</div>
       <div class="rotulo">Ya existían</div>
-      <div class="pie">adoptadas o sembradas</div></div>
+      <div class="pie">${vinculadas.toLocaleString("es-EC")} con cédula puesta por la API
+        (<code>vinculacion</code>)</div></div>
     <div class="tile ${totalAnomalias ? "alerta" : "bien"}"><div class="cifra">${totalAnomalias.toLocaleString("es-EC")}</div>
       <div class="rotulo">Filas con defectos</div>
       <div class="pie">${totalAnomalias ? "revisar abajo" : "nada que revisar"}</div></div>`);
@@ -228,16 +240,22 @@ function mover(direccion) {
 // Descarga con fetch y no con llamar(): el helper compartido pide y parsea JSON, y
 // esto es un archivo. La clave va en la cabecera, así que no sirve un <a href> suelto;
 // se recibe el blob y se dispara la descarga desde un enlace temporal.
-async function descargarReporte() {
+//
+// Los dos formatos comparten todo salvo el endpoint: el CSV llega en streaming y
+// es inmediato; el Excel se arma entero en el servidor antes de enviarse (un .xlsx
+// es un ZIP y no se puede cerrar a medias), así que con la tabla completa tarda
+// unos segundos. Por eso el loader se queda puesto hasta que llega el blob.
+async function descargarReporte(formato) {
+  const esExcel = formato === "xlsx";
   _cargando(true);
   try {
-    const r = await fetch(API_VINCULOS + "reporte.csv?" + parametros().toString(),
+    const r = await fetch(API_VINCULOS + `reporte.${formato}?` + parametros().toString(),
                           { headers: { "X-API-Key": clave } });
     if (sesionInvalida(r.status)) return;
     if (!r.ok) { avisar(`No se pudo generar el reporte (HTTP ${r.status}).`, true); return; }
 
     const cabecera = r.headers.get("Content-Disposition") || "";
-    const nombre = (cabecera.match(/filename="([^"]+)"/) || [])[1] || "correos.csv";
+    const nombre = (cabecera.match(/filename="([^"]+)"/) || [])[1] || `correos.${formato}`;
     const url = URL.createObjectURL(await r.blob());
     const enlace = Object.assign(document.createElement("a"), { href: url, download: nombre });
     document.body.appendChild(enlace);

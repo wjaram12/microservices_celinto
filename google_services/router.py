@@ -35,7 +35,7 @@ from fastapi.responses import StreamingResponse
 from commons.rate_limit import limitar_tasa
 from commons.seguridad import requiere_admin, verificar_api_key
 
-from . import auditoria, nomenclatura
+from . import auditoria, nomenclatura, reporte_xlsx
 from .cliente import entrada_external_id, obtener_directorio
 from .config import settings
 from .errores import (
@@ -56,6 +56,10 @@ from .vinculos import ORIGENES, vinculos
 logger = logging.getLogger(__name__)
 
 api = APIRouter(tags=["Google Workspace"])
+
+# El tipo MIME de un .xlsx. Escrito una vez: si el navegador recibe otro, se niega
+# a tratarlo como libro y lo descarga como archivo suelto.
+XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 # Ambas dependencias AUTENTICAN (componen verificar_api_key) y además cuentan la
 # petición contra el límite de su categoría. En rutas admin van DESPUÉS de
@@ -498,8 +502,11 @@ def procesar_persona(datos: SolicitudProcesar, quien: dict = Depends(verificar_a
                 # que dos homónimos con cédulas distintas no se serializan entre sí.
                 # Si otra cédula ya reclamó esta cuenta, esto lanza 409 y Google queda
                 # intacto. Al revés, habríamos pisado la cédula del otro.
+                # `vinculacion`, NO `creacion`: aquí no nace ninguna cuenta. La
+                # cuenta ya existía en Google y lo único que se hace es escribirle
+                # la cédula. Contarla como creada infla las cifras de la migración.
                 vinculos.registrar(cedula, cuenta["google_id"], cuenta["email"],
-                                   cuenta["ou"], quien["consumidor"], True, "creacion")
+                                   cuenta["ou"], quien["consumidor"], True, "vinculacion")
                 directorio.usuarios.establecer_external_id(
                     cuenta["google_id"], cedula, "identificacion")
                 distinto = bool(propuesto) and propuesto != cuenta["email"]
@@ -872,6 +879,30 @@ def _validar_filtros(origen: Optional[str], consumidor: Optional[str], desde, ha
     return consumidor
 
 
+def _describir_filtros(origen, consumidor, desde, hasta, texto) -> str:
+    """
+    Frase para la portada del .xlsx: qué recorte se está mirando.
+
+    Va en el archivo a propósito. Un reporte descargado se reenvía por correo y se
+    mira semanas después, cuando ya nadie recuerda con qué filtros salió; sin esta
+    línea, un recorte parece el total.
+    """
+    partes = []
+    if origen:
+        partes.append(f"origen «{origen}»")
+    if consumidor:
+        partes.append(f"registradas por «{consumidor}»")
+    if desde:
+        partes.append(f"desde el {desde}")
+    if hasta:
+        partes.append(f"hasta el {hasta} (incluido)")
+    if texto:
+        partes.append(f"que contengan «{texto}»")
+    if not partes:
+        return "Sin filtros: todas las cuentas registradas."
+    return "Filtro aplicado: " + ", ".join(partes) + "."
+
+
 # Columnas del CSV, en este orden. Se declaran aparte porque el orden de la cabecera
 # y el de las celdas TIENE que ser el mismo, y con dos listas acaba no siéndolo.
 COLUMNAS_REPORTE = ("identificacion", "email", "ou", "principal", "origen",
@@ -882,9 +913,11 @@ COLUMNAS_REPORTE = ("identificacion", "email", "ou", "principal", "origen",
          dependencies=[limite_lectura])
 def listar_vinculos(
     origen: Optional[str] = Query(
-        None, description="backfill · creacion · sincronizacion · manual. "
+        None, description="backfill · creacion · vinculacion · sincronizacion · manual. "
                           "`creacion` son las cuentas que esta API creó en Google; "
-                          "`sincronizacion` las que ya existían y solo adoptó."),
+                          "`vinculacion`, las que ya existían y solo recibieron la "
+                          "cédula; `sincronizacion`, las que ya existían y ya la "
+                          "llevaban. No sumes `creacion` y `vinculacion` como creadas."),
     consumidor: Optional[str] = Query(
         None, description="Sistema que registró el vínculo. Una clave de consumo "
                           "solo puede ver el suyo."),
@@ -985,6 +1018,61 @@ def reporte_vinculos(
         headers={"Content-Disposition": f'attachment; filename="{nombre}"'})
 
 
+@api.get("/google-services/vinculos/reporte.xlsx", dependencies=[limite_lectura],
+         response_class=Response,
+         responses={200: {"content": {XLSX: {}},
+                          "description": "El reporte como libro de Excel descargable."}})
+def reporte_vinculos_xlsx(
+    origen: Optional[str] = Query(None, description="Mismo filtro que el listado."),
+    consumidor: Optional[str] = Query(None),
+    desde: Optional[date] = Query(None),
+    hasta: Optional[date] = Query(None),
+    q: Optional[str] = Query(None),
+    dias: int = Query(30, ge=1, le=365,
+                      description="Ventana del desglose diario de la hoja Resumen."),
+    quien: dict = Depends(verificar_api_key),
+):
+    """
+    El mismo listado que el CSV, **como libro de Excel** con tres hojas: Resumen
+    (cifras y desglose por origen), Correos (el listado) y Anomalías.
+
+    Mismos filtros y misma visibilidad que `GET /vinculos/`: una clave de consumo
+    exporta solo lo suyo.
+
+    A diferencia del CSV, **no va en streaming**: un .xlsx es un ZIP y no se puede
+    empezar a enviar antes de cerrarlo. A cambio, si la base falla a mitad, el
+    error sale como 500 limpio en vez de cortar el archivo por la mitad.
+
+    El libro se arma en modo `write_only` (ver google_services/reporte_xlsx.py):
+    sobre las 23 620 filas reales son 1,1 MB de pico en vez de 61,9 MB, que es lo
+    que permite servirlo desde un worker sin comprometer el proceso.
+
+    COSTE MEDIDO (23 620 filas): ~14 s y 1,4 MB. Es CPU dentro del hilo que atiende
+    la petición, así que la tabla COMPLETA en Excel no es gratis. Con cualquier
+    filtro baja a ~0,3 s, que es el uso normal. Para volcar la tabla entera de
+    forma habitual, el CSV va en streaming y es inmediato.
+
+    Ojo: las hojas Resumen y Anomalías describen la tabla COMPLETA, no el recorte
+    filtrado. La hoja Correos sí respeta el filtro, y la frase de la portada dice
+    cuál se aplicó.
+    """
+    consumidor = _validar_filtros(origen, consumidor, desde, hasta, quien)
+
+    try:
+        libro = reporte_xlsx.generar(
+            vinculos.exportar(origen=origen, consumidor=consumidor, desde=desde,
+                              hasta=hasta, texto=q),
+            vinculos.resumen(dias=dias, dominio=settings.GOOGLE_DOMINIO),
+            _describir_filtros(origen, consumidor, desde, hasta, q))
+    except Exception as e:
+        raise _traducir(e)
+
+    return Response(
+        content=libro, media_type=XLSX,
+        headers={"Content-Disposition":
+                 f'attachment; filename="{reporte_xlsx.nombre_archivo()}"'})
+
+
 @api.get("/google-services/vinculos/resumen", response_model=RespuestaResumenVinculos,
          dependencies=[limite_lectura])
 def resumen_vinculos(
@@ -1010,12 +1098,20 @@ def resumen_vinculos(
     except Exception as e:
         raise _traducir(e)
 
-    creadas = sum(f["cuentas"] for f in r["por_origen"] if f["origen"] == "creacion")
+    # Creadas y vinculadas se cuentan APARTE: una cuenta que ya existía y a la que
+    # solo se le escribió la cédula no es una cuenta creada. Estuvieron mezcladas
+    # bajo `creacion` hasta el 2026-08-19 (ver ORIGENES en vinculos.py).
+    por_origen = {f["origen"]: 0 for f in r["por_origen"]}
+    for f in r["por_origen"]:
+        por_origen[f["origen"]] += f["cuentas"]
+    creadas = por_origen.get("creacion", 0)
+    vinculadas = por_origen.get("vinculacion", 0)
+
     return RespuestaResumenVinculos(
         result=True,
         message=(f"{r['vinculos']} vínculo(s) de {r['personas']} persona(s); "
-                 f"{creadas} cuenta(s) creadas por la API. "
-                 f"{len(r['anomalias'])} tipo(s) de anomalía."),
+                 f"{creadas} cuenta(s) creadas por la API y {vinculadas} adoptada(s) "
+                 f"(ya existían). {len(r['anomalias'])} tipo(s) de anomalía."),
         vinculos=r["vinculos"], personas=r["personas"],
         por_origen=r["por_origen"], por_dia=r["por_dia"], anomalias=r["anomalias"])
 

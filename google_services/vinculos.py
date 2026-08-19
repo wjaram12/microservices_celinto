@@ -37,7 +37,20 @@ from .errores import ErrorDeConflicto
 logger = logging.getLogger(__name__)
 
 # De dónde salió el vínculo. Sirve para auditar y para reconstruir.
-ORIGENES = {"backfill", "creacion", "sincronizacion", "manual"}
+#
+#   creacion       la API creó la cuenta en Google. Solo esto es una creación.
+#   vinculacion    la cuenta YA existía; la API le escribió la cédula y la adoptó.
+#   sincronizacion la cuenta ya existía y ya llevaba su cédula: solo se indexó.
+#   backfill       la sembró la migración masiva de cédulas.
+#   manual         la vinculó una persona por la API.
+#
+# `vinculacion` y `creacion` estuvieron mezcladas bajo `creacion` hasta el
+# 2026-08-19: la rama que solo escribe la cédula en una cuenta preexistente
+# registraba como si la hubiera creado, e inflaba el contador de cuentas creadas.
+# Las filas anteriores a esa fecha no se pueden separar mirando solo esta tabla;
+# migrar_origen_vinculacion.py lo resuelve preguntando a Google la fecha de
+# creación de cada cuenta.
+ORIGENES = {"backfill", "creacion", "vinculacion", "sincronizacion", "manual"}
 
 
 class ServicioVinculos(ServicioBD):
