@@ -1,0 +1,255 @@
+{% extends "base.html" %}
+{% block titulo %}Correos · Administración{% endblock %}
+{% block titulo_pagina %}📧 Correos{% endblock %}
+{% block subtitulo %}Cuentas institucionales registradas: quién las creó, cuándo y por qué vía.{% endblock %}
+
+{% block contenido %}
+
+<!-- Cifras de cabecera. Salen de /vinculos/resumen, que no consulta Google. -->
+<div class="tarjetas" id="c-resumen"></div>
+
+<!-- Solo aparece si el resumen trae anomalías; con la lista vacía no se pinta nada. -->
+<div id="c-anomalias"></div>
+
+<div class="tarjeta filtros">
+  <div class="fila">
+    <div>
+      <label for="c-origen">Origen</label>
+      <select id="c-origen">
+        <option value="">Todos</option>
+        <option value="creacion">creacion — la API creó la cuenta</option>
+        <option value="sincronizacion">sincronizacion — ya existía y se adoptó</option>
+        <option value="manual">manual — vinculada a mano</option>
+        <option value="backfill">backfill</option>
+      </select>
+    </div>
+    <div>
+      <label for="c-consumidor">Consumidor</label>
+      <input type="text" id="c-consumidor" placeholder="ucgone, posgrados, sga, backfill…">
+    </div>
+    <div>
+      <label for="c-desde">Desde</label>
+      <input type="date" id="c-desde">
+    </div>
+    <div>
+      <label for="c-hasta">Hasta</label>
+      <input type="date" id="c-hasta">
+    </div>
+    <div>
+      <label for="c-q">Cédula o correo</label>
+      <input type="text" id="c-q" placeholder="09547… o nombre.apellido"
+             onkeydown="if(event.key==='Enter') aplicarFiltros()">
+    </div>
+  </div>
+  <div class="acciones">
+    <button class="btn-principal" onclick="aplicarFiltros()">🔍 Buscar</button>
+    <button class="btn-texto" onclick="limpiarFiltros()">Limpiar</button>
+    <button class="btn-suave" onclick="descargarReporte()">⬇️ Descargar CSV</button>
+    <span class="meta" id="c-alcance"></span>
+  </div>
+</div>
+
+<div class="tabla-envoltura">
+  <table class="tabla">
+    <thead>
+      <tr>
+        <th>Cédula</th><th>Correo</th><th>Unidad</th>
+        <th>Origen</th><th>Consumidor</th><th>Registrado</th>
+      </tr>
+    </thead>
+    <tbody id="c-cuerpo"></tbody>
+  </table>
+</div>
+
+<div class="paginacion">
+  <span class="meta" id="c-rango"></span>
+  <span>
+    <button class="btn-icono" id="c-anterior" onclick="mover(-1)">← Anterior</button>
+    <button class="btn-icono" id="c-siguiente" onclick="mover(1)">Siguiente →</button>
+  </span>
+</div>
+{% endblock %}
+
+{% block js %}
+<style>
+  /* Tiles de cifras: la primera lectura de la página. */
+  .tarjetas { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin-bottom: 16px; }
+  .tile {
+    background: var(--md-surface-container-lowest); border-radius: var(--md-radio-m);
+    padding: 16px 18px; box-shadow: var(--md-elev-1);
+  }
+  .tile .cifra { font-size: 1.75rem; font-weight: 400; line-height: 1.2; }
+  .tile .rotulo { font-size: .72rem; text-transform: uppercase; letter-spacing: .03em; color: var(--md-on-surface-variant); margin-top: 2px; }
+  .tile .pie { font-size: .72rem; color: var(--md-on-surface-variant); margin-top: 6px; }
+  .tile.alerta { background: var(--md-error-container); color: var(--md-on-error-container); }
+  .tile.alerta .rotulo, .tile.alerta .pie { color: var(--md-on-error-container); }
+  .tile.bien .cifra { color: var(--md-on-exito-container); }
+
+  .filtros { padding-top: 4px; }
+  /* Los campos de fecha no estaban en los selectores compartidos de base.html. */
+  .filtros input[type=date] {
+    width: 100%; padding: 12px 14px; border: 1px solid var(--md-outline);
+    border-radius: var(--md-radio-xs); font: inherit; font-size: .9rem;
+    background: transparent; color: var(--md-on-surface);
+  }
+  .filtros input[type=date]:focus { outline: none; border-color: var(--md-primary); box-shadow: 0 0 0 1px var(--md-primary); }
+  html.oscuro .filtros input[type=date]::-webkit-calendar-picker-indicator { filter: invert(1); }
+
+  .aviso {
+    background: var(--md-error-container); color: var(--md-on-error-container);
+    border-radius: var(--md-radio-m); padding: 14px 16px; margin-bottom: 16px; font-size: .85rem;
+  }
+  .aviso b { display: block; margin-bottom: 6px; }
+  .aviso code { font-family: Consolas, monospace; }
+
+  .paginacion { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 14px; flex-wrap: wrap; }
+  .paginacion button:disabled { opacity: .4; cursor: default; }
+
+  /* Un color por origen: distingue de un vistazo lo que creó la API de lo sembrado. */
+  .etiqueta.creacion { background: var(--md-exito-container); color: var(--md-on-exito-container); }
+  .etiqueta.sincronizacion { background: var(--md-secondary-container); color: var(--md-on-secondary-container); }
+  .etiqueta.manual { background: var(--md-primary-container); color: var(--md-on-primary-container); }
+  .etiqueta.backfill { background: var(--md-surface-container-high); color: var(--md-on-surface-variant); }
+</style>
+<script>
+const API_VINCULOS = "/api/v1/google-services/vinculos/";
+const POR_PAGINA = 50;
+let desplazamiento = 0;
+let totalFilas = 0;
+
+// Los filtros del listado, del reporte y del contador son LOS MISMOS: se arman una
+// vez y se reutilizan, para que el CSV no pueda traer un conjunto distinto del que
+// se está viendo en la tabla.
+function parametros() {
+  const p = new URLSearchParams();
+  const campos = { origen: "c-origen", consumidor: "c-consumidor", desde: "c-desde", hasta: "c-hasta", q: "c-q" };
+  for (const [clave_, id] of Object.entries(campos)) {
+    const v = $("#" + id).val().trim();
+    if (v) p.append(clave_, v);
+  }
+  return p;
+}
+
+// La usa el login de base.html para validar la clave: true = clave buena.
+async function cargarDatos() {
+  const p = parametros();
+  p.append("limite", POR_PAGINA);
+  p.append("desplazamiento", desplazamiento);
+
+  const { status, ok, cuerpo } = await llamar(API_VINCULOS + "?" + p.toString());
+  if (!ok) {
+    if (status === 401 || status === 403) avisar("Clave inválida o sin permisos.", true);
+    else avisar((cuerpo && cuerpo.detail) || `No se pudo cargar el listado (HTTP ${status}).`, true);
+    return false;
+  }
+  renderizarTabla(cuerpo);
+  cargarResumen();   // en paralelo: la tabla no depende de las cifras
+  return true;
+}
+
+async function cargarResumen() {
+  const { ok, cuerpo } = await llamar(API_VINCULOS + "resumen");
+  if (!ok) return;
+  const porOrigen = cuerpo.por_origen || [];
+  const suma = clave_ => porOrigen.filter(f => f.origen === clave_).reduce((t, f) => t + f.cuentas, 0);
+  const creadas = suma("creacion");
+  const anomalias = cuerpo.anomalias || [];
+  const totalAnomalias = anomalias.reduce((t, a) => t + a.filas, 0);
+
+  $("#c-resumen").html(`
+    <div class="tile"><div class="cifra">${cuerpo.vinculos.toLocaleString("es-EC")}</div>
+      <div class="rotulo">Cuentas registradas</div>
+      <div class="pie">${cuerpo.personas.toLocaleString("es-EC")} persona(s)</div></div>
+    <div class="tile"><div class="cifra">${creadas.toLocaleString("es-EC")}</div>
+      <div class="rotulo">Creadas por la API</div>
+      <div class="pie">origen <code>creacion</code></div></div>
+    <div class="tile"><div class="cifra">${suma("sincronizacion").toLocaleString("es-EC")}</div>
+      <div class="rotulo">Ya existían</div>
+      <div class="pie">adoptadas o sembradas</div></div>
+    <div class="tile ${totalAnomalias ? "alerta" : "bien"}"><div class="cifra">${totalAnomalias.toLocaleString("es-EC")}</div>
+      <div class="rotulo">Filas con defectos</div>
+      <div class="pie">${totalAnomalias ? "revisar abajo" : "nada que revisar"}</div></div>`);
+
+  $("#c-anomalias").html(!anomalias.length ? "" : `
+    <div class="aviso">
+      <b>⚠️ Revisar ${totalAnomalias} fila(s)</b>
+      ${anomalias.map(a => `${escapar(a.problema)}: <b>${a.filas}</b> —
+        <code>${(a.ejemplos || []).map(escapar).join(", ")}</code>`).join("<br>")}
+      <div style="margin-top:8px">Son defectos <b>de forma</b> (correo vacío, dominio ajeno,
+      cédula de relleno). Que la cuenta exista de verdad en Google lo responde
+      <code>/personas/{cédula}/confirmar</code>, no esta página.</div>
+    </div>`);
+}
+
+function renderizarTabla(cuerpo) {
+  totalFilas = cuerpo.total || 0;
+  const filas = cuerpo.cuentas || [];
+
+  // El servidor devuelve el filtro que REALMENTE aplicó: si la clave es de consumo
+  // acota al suyo aunque se pida otro, y hay que decirlo en vez de fingir que se ve todo.
+  const aplicado = (cuerpo.filtros || {}).consumidor;
+  const pedido = $("#c-consumidor").val().trim();
+  $("#c-alcance").text(aplicado && aplicado !== pedido
+    ? `Tu clave solo permite ver los registros de «${aplicado}».` : "");
+
+  $("#c-cuerpo").html(!filas.length
+    ? '<tr><td colspan="6" class="sin-datos">Ningún registro coincide con el filtro.</td></tr>'
+    : filas.map(v => `
+      <tr>
+        <td>${escapar(v.identificacion)}</td>
+        <td><b>${escapar(v.email)}</b>${v.principal ? '<span class="sub">principal</span>' : ""}</td>
+        <td>${escapar(v.ou || "—")}</td>
+        <td><span class="etiqueta ${escapar(v.origen)}">${escapar(v.origen)}</span></td>
+        <td>${escapar(v.consumidor)}</td>
+        <td>${escapar(v.creado_en)}</td>
+      </tr>`).join(""));
+
+  const primera = totalFilas ? desplazamiento + 1 : 0;
+  $("#c-rango").text(`${primera}–${desplazamiento + filas.length} de ${totalFilas.toLocaleString("es-EC")}`);
+  $("#c-anterior").prop("disabled", desplazamiento === 0);
+  $("#c-siguiente").prop("disabled", desplazamiento + filas.length >= totalFilas);
+}
+
+function aplicarFiltros() { desplazamiento = 0; cargarDatos(); }
+
+function limpiarFiltros() {
+  $("#c-origen").val("");
+  $("#c-consumidor, #c-desde, #c-hasta, #c-q").val("");
+  aplicarFiltros();
+}
+
+function mover(direccion) {
+  const siguiente = desplazamiento + direccion * POR_PAGINA;
+  if (siguiente < 0 || siguiente >= totalFilas) return;
+  desplazamiento = siguiente;
+  cargarDatos();
+}
+
+// Descarga con fetch y no con llamar(): el helper compartido pide y parsea JSON, y
+// esto es un archivo. La clave va en la cabecera, así que no sirve un <a href> suelto;
+// se recibe el blob y se dispara la descarga desde un enlace temporal.
+async function descargarReporte() {
+  _cargando(true);
+  try {
+    const r = await fetch(API_VINCULOS + "reporte.csv?" + parametros().toString(),
+                          { headers: { "X-API-Key": clave } });
+    if (sesionInvalida(r.status)) return;
+    if (!r.ok) { avisar(`No se pudo generar el reporte (HTTP ${r.status}).`, true); return; }
+
+    const cabecera = r.headers.get("Content-Disposition") || "";
+    const nombre = (cabecera.match(/filename="([^"]+)"/) || [])[1] || "correos.csv";
+    const url = URL.createObjectURL(await r.blob());
+    const enlace = Object.assign(document.createElement("a"), { href: url, download: nombre });
+    document.body.appendChild(enlace);
+    enlace.click();
+    enlace.remove();
+    URL.revokeObjectURL(url);
+    avisar(`Reporte descargado (${nombre}).`);
+  } catch (e) {
+    avisar("No se pudo descargar el reporte.", true);
+  } finally {
+    _cargando(false);
+  }
+}
+</script>
+{% endblock %}

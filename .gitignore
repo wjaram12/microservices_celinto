@@ -11,6 +11,9 @@ account_service.json
 *.json.key
 *.pem
 
+# Config local de Claude Code: ha contenido una API key admin en texto plano.
+.claude/settings.local.json
+
 # Caché de Python
 __pycache__/
 *.pyc
@@ -32,3 +35,7 @@ cedula_prueba*
 
 # Base de datos local de prompts del clasificador
 *.db
+
+# Informes generados (.docx/.xlsx): binarios pesados, se regeneran con
+# herramientas/informes/. No versionar.
+*.docx

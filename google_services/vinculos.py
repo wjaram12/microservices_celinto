@@ -130,6 +130,169 @@ class ServicioVinculos(ServicioBD):
                 base["por_consumidor"] = [dict(f) for f in cur.fetchall()]
         return base
 
+    @staticmethod
+    def _filtros(origen: Optional[str], consumidor: Optional[str], desde, hasta,
+                 texto: Optional[str]) -> tuple:
+        """
+        Traduce los filtros del listado a (fragmento WHERE, valores).
+
+        Los comparte el listado paginado y la exportación, para que el CSV no pueda
+        acabar conteniendo un conjunto distinto del que se ve en pantalla.
+
+        `hasta` es INCLUSIVO: quien pide `hasta=2026-07-31` espera ver lo del 31, y
+        `creado_en <= '2026-07-31'` dejaría fuera todo lo posterior a medianoche.
+
+        Los fragmentos llevan marcador; los valores viajan SIEMPRE como parámetros,
+        nunca concatenados.
+        """
+        condiciones, valores = [], []
+        if origen:
+            condiciones.append("origen = %s")
+            valores.append(origen.strip())
+        if consumidor:
+            condiciones.append("consumidor = %s")
+            valores.append(consumidor.strip())
+        if desde is not None:
+            condiciones.append("creado_en >= %s")
+            valores.append(desde)
+        if hasta is not None:
+            condiciones.append("creado_en < %s + INTERVAL '1 day'")
+            valores.append(hasta)
+        if texto:
+            # Una sola caja de búsqueda para las dos llaves con las que se pregunta
+            # por una persona: su cédula o su correo.
+            condiciones.append("(identificacion LIKE %s OR lower(email) LIKE %s)")
+            patron = f"%{texto.strip().lower()}%"
+            valores.extend([patron, patron])
+        return ("WHERE " + " AND ".join(condiciones)) if condiciones else "", valores
+
+    def listar(self, origen: Optional[str] = None, consumidor: Optional[str] = None,
+               desde=None, hasta=None, texto: Optional[str] = None,
+               limite: int = 100, desplazamiento: int = 0) -> dict:
+        """
+        Vínculos que cumplen los filtros, más el total SIN paginar.
+
+        Devuelve las dos cifras porque un cliente que pagina necesita saber cuántas
+        quedan; con solo la página no puede.
+        """
+        donde, valores = self._filtros(origen, consumidor, desde, hasta, texto)
+        with self._conectar() as con:
+            with con.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(f"SELECT count(*) AS n FROM google_vinculos {donde}", valores)
+                total = cur.fetchone()["n"]
+                cur.execute(
+                    f"SELECT * FROM google_vinculos {donde} "
+                    "ORDER BY creado_en DESC, id DESC LIMIT %s OFFSET %s",
+                    valores + [limite, desplazamiento])
+                filas = [self._fila(f) for f in cur.fetchall()]
+        return {"total": total, "filas": filas}
+
+    def exportar(self, origen: Optional[str] = None, consumidor: Optional[str] = None,
+                 desde=None, hasta=None, texto: Optional[str] = None, lote: int = 1000):
+        """
+        Itera TODOS los vínculos que cumplen el filtro, sin paginar.
+
+        Generador, y con cursor del lado del SERVIDOR (el que tiene `name`): así
+        PostgreSQL manda los resultados por lotes en vez de materializar las 23 620
+        filas en memoria del worker para luego serializarlas otra vez. Un reporte no
+        debe poder tumbar el proceso por su tamaño.
+
+        La conexión vive dentro del generador a propósito: quien lo consume (la
+        respuesta en streaming) lo hace DESPUÉS de que el endpoint haya retornado, y
+        si el `with` estuviera fuera la conexión ya estaría devuelta al pool.
+        """
+        donde, valores = self._filtros(origen, consumidor, desde, hasta, texto)
+        with self._conectar() as con:
+            with con.cursor(name="exportar_vinculos", cursor_factory=RealDictCursor) as cur:
+                cur.itersize = lote
+                cur.execute(
+                    f"SELECT * FROM google_vinculos {donde} "
+                    "ORDER BY creado_en DESC, id DESC", valores)
+                for f in cur:
+                    yield self._fila(f)
+
+    def resumen(self, dias: int = 30, dominio: str = "") -> dict:
+        """
+        Cifras de la migración: por dónde entró cada cuenta, ritmo de altas y filas
+        sospechosas.
+
+        Las anomalías son de FORMA, no de existencia: esta tabla es un índice de
+        Google y no sabe si la cuenta sigue viva. Para eso está `/confirmar`, que
+        lee el directorio. Aquí solo se detecta lo que se puede ver desde la base:
+        un correo vacío, de otro dominio, una cédula que no es una cédula.
+        """
+        with self._conectar() as con:
+            with con.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT count(*) AS vinculos, "
+                            "count(DISTINCT identificacion) AS personas FROM google_vinculos")
+                base = dict(cur.fetchone())
+
+                cur.execute(
+                    """
+                    SELECT origen, consumidor,
+                           count(*)                       AS cuentas,
+                           count(DISTINCT identificacion) AS personas,
+                           min(creado_en)::date::text     AS primera,
+                           max(creado_en)::date::text     AS ultima
+                    FROM   google_vinculos
+                    GROUP  BY origen, consumidor
+                    ORDER  BY cuentas DESC
+                    """)
+                base["por_origen"] = [dict(f) for f in cur.fetchall()]
+
+                cur.execute(
+                    """
+                    SELECT creado_en::date::text AS dia, origen, consumidor,
+                           count(*) AS altas
+                    FROM   google_vinculos
+                    WHERE  creado_en >= now() - make_interval(days => %s)
+                    GROUP  BY dia, origen, consumidor
+                    ORDER  BY dia DESC, altas DESC
+                    """, (dias,))
+                base["por_dia"] = [dict(f) for f in cur.fetchall()]
+
+                # Cada rama cuenta un defecto y enseña hasta cinco ejemplos. Se
+                # consultan siempre todas y se descartan las de cero al final: así
+                # el que llama ve una lista vacía cuando todo está bien, en vez de
+                # tener que interpretar ceros.
+                #
+                # Las dos reglas afinadas contra los datos reales del dominio:
+                #
+                #   - El correo puede estar en un SUBDOMINIO. Hay 138 cuentas en
+                #     @posgrados.casagrande.edu.ec y son legítimas; exigir el dominio
+                #     exacto las marcaba todas como ajenas.
+                #   - Un documento con letras NO es un error: es un pasaporte o una
+                #     cédula extranjera (30 filas: 'AO677274', 'VS-BF232388'). Lo que
+                #     de verdad no debe estar es un valor de RELLENO, que es lo que
+                #     define identidad.cedula_invalida(): vacío, o un solo dígito
+                #     repetido ('0000000000' en filas que ni son personas). El regex
+                #     con retroceso `^(\\d)\\1*$` es ese `len(set(c)) == 1`.
+                cur.execute(
+                    r"""
+                    SELECT 'correo_vacio' AS problema, count(*) AS filas,
+                           (array_agg(identificacion))[1:5] AS ejemplos
+                    FROM   google_vinculos WHERE btrim(coalesce(email, '')) = ''
+                    UNION ALL
+                    SELECT 'dominio_ajeno', count(*), (array_agg(email))[1:5]
+                    FROM   google_vinculos
+                    WHERE  lower(email) NOT LIKE %s AND lower(email) NOT LIKE %s
+                    UNION ALL
+                    SELECT 'sin_google_id', count(*), (array_agg(identificacion))[1:5]
+                    FROM   google_vinculos WHERE btrim(coalesce(google_id, '')) = ''
+                    UNION ALL
+                    SELECT 'cedula_de_relleno', count(*), (array_agg(identificacion))[1:5]
+                    FROM   google_vinculos
+                    WHERE  btrim(coalesce(identificacion, '')) = ''
+                       OR  identificacion ~ '^(\d)\1*$'
+                    UNION ALL
+                    SELECT 'correo_repetido', count(*), (array_agg(email))[1:5]
+                    FROM   (SELECT lower(email) AS email FROM google_vinculos
+                            GROUP BY 1 HAVING count(*) > 1) d
+                    """,
+                    (f"%@{(dominio or '').lower()}", f"%.{(dominio or '').lower()}"))
+                base["anomalias"] = [dict(f) for f in cur.fetchall() if f["filas"]]
+        return base
+
     # ---------------------------------------------------------------- escritura
 
     def registrar(self, identificacion: str, google_id: str, email: str, ou: str,

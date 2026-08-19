@@ -9,10 +9,13 @@ portó la lógica de negocio que lo rodeaba (auditoría de correos, `RegistroSin
 serializadores de `Persona`): eso sigue en el monolito, que ahora puede consumir este
 servicio por HTTP en vez de hablar con Google directamente.
 
-Este servicio no tiene tablas propias, no usa Redis y no conoce a las personas de la
-universidad: se limita a ser una fachada REST autenticada sobre la Directory API.
+Este servicio se limita a ser una fachada REST autenticada sobre la Directory API.
 **Toda consulta va a Google en vivo**, sin caché — el directorio es la única fuente de
-verdad y nunca se sirve un dato potencialmente viejo.
+verdad y nunca se sirve un dato potencialmente viejo. Redis se usa **solo** para el
+limitador de tasa por API key (`commons.rate_limit`): la cuota del Admin SDK la
+comparten los tres sistemas cliente y el servicio impone el reparto (600/min por
+clave en endpoints que van a Google, 3 000/min en lecturas del índice; `429` +
+`Retry-After` al superarlo). Si Redis cae, el servicio sigue sin límite (fail-open).
 
 ## Cómo se autentica contra Google
 
@@ -53,6 +56,10 @@ Variables en `services/.env` (ver `.env.example`):
 | `GOOGLE_ADMIN_DELEGADO` | `ucgone.users@casagrande.edu.ec` | Administrador del dominio que el service account impersona. |
 | `GOOGLE_DOMINIO` | `casagrande.edu.ec` | Dominio institucional; se exige a los correos que se crean. |
 | `DATABASE_URL` | — | Común a todas las apps (`commons`); solo para validar las API keys. |
+| `REDIS_URL` | `redis://localhost:6379/0` | Común (`commons`); aquí solo para los contadores del limitador de tasa. |
+| `RATE_LIMIT_ACTIVO` | `true` | Interruptor global del limitador. |
+| `RATE_LIMIT_GOOGLE_POR_MINUTO` | `600` | Límite por API key en endpoints que consumen cuota del Admin SDK. `0` = sin límite. |
+| `RATE_LIMIT_LECTURA_POR_MINUTO` | `3000` | Límite por API key en lecturas del índice local. `0` = sin límite. |
 
 ## Arrancar
 
@@ -111,7 +118,8 @@ Toda respuesta sigue la convención del repo: `result` (señal booleana), `messa
 (texto para humanos, no parsear) y `status` (estado estructurado para lógica).
 
 Errores: `400` datos inválidos · `401`/`403` autenticación · `404` no existe ·
-`409` ya existe · `500` mala configuración del servicio · `502` Google falló.
+`409` ya existe · `429` límite de tasa (esperar `Retry-After`) · `500` mala
+configuración del servicio · `502` Google falló.
 
 ### Ejemplos
 

@@ -5,8 +5,9 @@ Prueba END-TO-END del servicio de Google Workspace corriendo de verdad
 SOLO HACE LECTURAS. No crea, no modifica ni borra cuentas, grupos ni unidades del
 dominio real, y no escribe nada fuera de sí misma.
 
-El servicio no usa Redis: si Redis está levantado, la suite lo aprovecha para
-comprobar afirmativamente que el servicio no deja ninguna clave en él.
+El servicio usa Redis SOLO para el limitador de tasa (claves `ratelimit:*`, se
+comprueba afirmativamente); los datos de Google no se cachean nunca (ninguna
+clave `google:*`).
 
 Uso:
     1. Arranca el servicio:
@@ -26,8 +27,14 @@ Variables de entorno:
     API_URL         base del servicio (default http://127.0.0.1:8092)
     API_PREFIJO     prefijo de las rutas (default ""; /api/v1 si va unificado)
     API_KEY_ADMIN   clave con scope admin (obligatoria)
-    API_KEY_CONSUMO clave con scope consumo (opcional; habilita la prueba del 403)
-
+    API_KEY_CONSUMO clave con scope consumo (opcional; habilita la prueba del 403
+                    y la de que el límite de tasa es por API key)
+    RATE_LIMIT_PRUEBA  (opcional) habilita la prueba del 429. Ponla al MISMO número
+                    que el límite de lectura del servidor, que debe arrancarse bajo
+                    (p. ej. PowerShell):
+                        $env:RATE_LIMIT_LECTURA_POR_MINUTO = "5"
+                        uvicorn google_services.main:app --port 8092
+                    y aquí: $env:RATE_LIMIT_PRUEBA = "5"
 """
 import os
 import sys
@@ -50,8 +57,9 @@ fallos = []
 
 
 def cliente_redis():
-    """Cliente Redis si está levantado, o None. Este servicio NO debe usar Redis;
-    lo único que se hace con él es comprobar que, efectivamente, no escribe nada."""
+    """Cliente Redis si está levantado, o None. El servicio solo escribe claves
+    `ratelimit:*` (limitador de tasa); se comprueba que no deja ninguna `google:*`
+    (no cachea datos del directorio)."""
     try:
         import redis
 
@@ -81,8 +89,8 @@ def pedir(metodo, ruta, **kwargs):
 
 
 print(f"Servicio bajo prueba: {BASE}{PREFIJO or ' (sin prefijo)'}")
-print("Redis: " + ("disponible (se verifica que el servicio NO lo usa)"
-                   if REDIS else "no disponible (el servicio no lo necesita)"))
+print("Redis: " + ("disponible (se verifica: contador ratelimit:* sí, caché google:* no)"
+                   if REDIS else "no disponible (el servicio degrada: sin límite de tasa)"))
 
 if not ADMIN:
     print("[FALLA] Falta API_KEY_ADMIN. Créala con: python gestionar_llaves.py crear pruebas admin")
@@ -194,15 +202,60 @@ check("DELETE /cache ya no existe -> 404", r.status_code == 404, f"status={r.sta
 
 if REDIS:
     # Comprobación afirmativa de que el servicio no cachea: tras varias lecturas,
-    # Redis no debe tener ni una clave `google:*`.
+    # Redis no debe tener ni una clave `google:*` (las `ratelimit:*` sí son suyas).
     REDIS.delete(*(REDIS.keys("google:*") or ["_"]))
     for _ in range(2):
         pedir("GET", "/google-services/unidades/", headers=A)
         pedir("GET", "/google-services/grupos/", headers=A)
     sobrantes = REDIS.keys("google:*")
-    check("El servicio no escribe NADA en Redis", not sobrantes, f"claves={sobrantes}")
+    check("El servicio no cachea datos de Google (sin claves google:*)",
+          not sobrantes, f"claves={sobrantes}")
 else:
-    print("  [SALTA] Comprobación de que no se usa Redis: Redis no está levantado.")
+    print("  [SALTA] Comprobación de caché: Redis no está levantado.")
+
+# ================== FASE 6: límite de tasa ==================
+print("\n=== Fase 6: límite de tasa (por API key, contador en Redis) ===")
+r = pedir("GET", "/google-services/vinculos/estado", headers=A)
+check("GET /vinculos/estado responde 200", r.status_code == 200, f"status={r.status_code}")
+
+if "X-RateLimit-Limit" not in r.headers:
+    print("  [SALTA] Sin cabeceras X-RateLimit-*: el limitador está apagado en el "
+          "servidor (RATE_LIMIT_ACTIVO=false, límite 0, o Redis caído = fail-open).")
+else:
+    limite = int(r.headers["X-RateLimit-Limit"])
+    restantes = int(r.headers["X-RateLimit-Remaining"])
+    check("Cabeceras X-RateLimit-Limit/Remaining coherentes",
+          0 <= restantes < limite, f"limite={limite} restantes={restantes}")
+
+    if REDIS:
+        claves = REDIS.keys("ratelimit:*")
+        check("El contador vive en Redis (ratelimit:*) y expira solo",
+              bool(claves) and any(REDIS.ttl(k) > 0 for k in claves),
+              f"claves={len(claves)}")
+
+    prueba = os.environ.get("RATE_LIMIT_PRUEBA", "")
+    if prueba.isdigit():
+        # El servidor debe correr con RATE_LIMIT_LECTURA_POR_MINUTO=<prueba>.
+        # N+2 peticiones garantizan exceder el cupo aunque la ventana acabe de rotar.
+        ultimo = None
+        for _ in range(int(prueba) + 2):
+            ultimo = pedir("GET", "/google-services/vinculos/estado", headers=A)
+        check("Al exceder el cupo del minuto -> 429", ultimo.status_code == 429,
+              f"status={ultimo.status_code}")
+        if ultimo.status_code == 429:
+            espera = int(ultimo.headers.get("Retry-After", "0"))
+            check("Retry-After entre 1 y 60 s", 1 <= espera <= 60, f"Retry-After={espera}")
+            check("El detail explica el límite en español",
+                  "límite" in ultimo.json().get("detail", ""))
+            if CONSUMO:
+                r = pedir("GET", "/google-services/vinculos/estado", headers=C)
+                check("La OTRA clave no está limitada (el límite es por API key)",
+                      r.status_code == 200, f"status={r.status_code}")
+            else:
+                print("  [SALTA] Límite por clave: define API_KEY_CONSUMO para probarlo.")
+    else:
+        print("  [SALTA] Prueba del 429: arranca el servidor con "
+              "RATE_LIMIT_LECTURA_POR_MINUTO=5 y define RATE_LIMIT_PRUEBA=5.")
 
 # ================== Resumen ==================
 print("\n" + "=" * 60)

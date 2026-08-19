@@ -22,10 +22,15 @@ ruta declara su categoría: `google` (consume cuota del Admin SDK, 600/min por A
 key) o `lectura` (índice local, ~2 ms, 3000/min). Redis se usa SOLO para ese
 contador; los datos de Google siguen sin cachearse.
 """
+import csv
+import io
 import logging
 import secrets
+from datetime import date
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi.responses import StreamingResponse
 
 from commons.rate_limit import limitar_tasa
 from commons.seguridad import requiere_admin, verificar_api_key
@@ -40,13 +45,13 @@ from .jerarquia import principal
 from .schemas import (
     RespuestaAuditar, RespuestaConfirmacion, RespuestaCorreoSugerido,
     RespuestaCrearPersona, RespuestaEliminacion, RespuestaEstadoVinculos,
-    RespuestaGrupos, RespuestaListaUsuarios, RespuestaMiembro, RespuestaMiembros,
-    RespuestaPersona, RespuestaProcesar, RespuestaUnidades, RespuestaUsuario,
-    RespuestaVinculo, SolicitudActualizarUsuario, SolicitudAgregarMiembro,
-    SolicitudAuditar, SolicitudCrearPersona, SolicitudCrearUsuario, SolicitudProcesar,
-    SolicitudVincular, validar_dominio,
+    RespuestaGrupos, RespuestaListaUsuarios, RespuestaListaVinculos, RespuestaMiembro,
+    RespuestaMiembros, RespuestaPersona, RespuestaProcesar, RespuestaResumenVinculos,
+    RespuestaUnidades, RespuestaUsuario, RespuestaVinculo, SolicitudActualizarUsuario,
+    SolicitudAgregarMiembro, SolicitudAuditar, SolicitudCrearPersona,
+    SolicitudCrearUsuario, SolicitudProcesar, SolicitudVincular, validar_dominio,
 )
-from .vinculos import vinculos
+from .vinculos import ORIGENES, vinculos
 
 logger = logging.getLogger(__name__)
 
@@ -843,6 +848,176 @@ def estado_vinculos():
         message=f"{r['vinculos']} vínculo(s) de {r['personas']} persona(s).",
         vinculos=r["vinculos"], personas=r["personas"],
         por_consumidor=r["por_consumidor"])
+
+
+def _validar_filtros(origen: Optional[str], consumidor: Optional[str], desde, hasta,
+                     quien: dict) -> Optional[str]:
+    """
+    Valida los filtros del listado y devuelve el `consumidor` que se debe aplicar.
+
+    Lo comparten el listado y el reporte para que el CSV no pueda contener un
+    conjunto distinto del que se ve en pantalla, ni saltarse la visibilidad.
+    """
+    if origen and origen not in ORIGENES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Origen inválido '{origen}'. Debe ser uno de: {', '.join(sorted(ORIGENES))}.")
+    if desde and hasta and desde > hasta:
+        raise HTTPException(status_code=400, detail="'desde' es posterior a 'hasta'.")
+
+    # El listado nombra a personas concretas. Un sistema cliente no tiene por qué ver
+    # las altas de los otros dos, así que su propia identidad manda sobre lo que pida.
+    if quien.get("scope") != "admin":
+        return quien["consumidor"]
+    return consumidor
+
+
+# Columnas del CSV, en este orden. Se declaran aparte porque el orden de la cabecera
+# y el de las celdas TIENE que ser el mismo, y con dos listas acaba no siéndolo.
+COLUMNAS_REPORTE = ("identificacion", "email", "ou", "principal", "origen",
+                    "consumidor", "google_id", "creado_en", "actualizado_en")
+
+
+@api.get("/google-services/vinculos/", response_model=RespuestaListaVinculos,
+         dependencies=[limite_lectura])
+def listar_vinculos(
+    origen: Optional[str] = Query(
+        None, description="backfill · creacion · sincronizacion · manual. "
+                          "`creacion` son las cuentas que esta API creó en Google; "
+                          "`sincronizacion` las que ya existían y solo adoptó."),
+    consumidor: Optional[str] = Query(
+        None, description="Sistema que registró el vínculo. Una clave de consumo "
+                          "solo puede ver el suyo."),
+    desde: Optional[date] = Query(None, description="Fecha de alta mínima (inclusive)."),
+    hasta: Optional[date] = Query(None, description="Fecha de alta máxima (inclusive)."),
+    q: Optional[str] = Query(None, description="Busca en la cédula y en el correo."),
+    limite: int = Query(100, ge=1, le=1000),
+    desplazamiento: int = Query(0, ge=0),
+    quien: dict = Depends(verificar_api_key),
+):
+    """
+    Qué cuentas hay registradas, con quién las creó y cuándo. **Paginado.**
+
+    Responde desde la tabla de vínculos (~10 ms), no desde Google: no consume cuota
+    del Admin SDK. Por eso dice qué se **registró**, no qué sigue vivo en el
+    directorio — una cuenta borrada a mano en la consola de admin sigue apareciendo
+    aquí. Para comprobar una cuenta concreta contra Google:
+    `GET /personas/{cedula}/confirmar`; para todas las de una persona,
+    `GET /personas/{cedula}?verificar=true`.
+
+    **Visibilidad:** una clave de consumo solo ve los vínculos que registró ella
+    misma; la clave admin las ve todas. El filtro aplicado se devuelve en `filtros`,
+    así el cliente no tiene que adivinar si se le acotó la consulta.
+    """
+    consumidor = _validar_filtros(origen, consumidor, desde, hasta, quien)
+
+    try:
+        r = vinculos.listar(origen=origen, consumidor=consumidor, desde=desde,
+                            hasta=hasta, texto=q, limite=limite,
+                            desplazamiento=desplazamiento)
+    except Exception as e:
+        raise _traducir(e)
+
+    return RespuestaListaVinculos(
+        result=True,
+        message=(f"{r['total']} vínculo(s) coinciden; se devuelven {len(r['filas'])}."
+                 if r["total"] else "Ningún vínculo coincide con el filtro."),
+        status="encontrado" if r["filas"] else "vacio",
+        total=r["total"], limite=limite, desplazamiento=desplazamiento,
+        filtros={"origen": origen, "consumidor": consumidor,
+                 "desde": desde.isoformat() if desde else None,
+                 "hasta": hasta.isoformat() if hasta else None, "q": q},
+        cuentas=r["filas"])
+
+
+@api.get("/google-services/vinculos/reporte.csv", dependencies=[limite_lectura],
+         response_class=StreamingResponse,
+         responses={200: {"content": {"text/csv": {}},
+                          "description": "El reporte como CSV descargable."}})
+def reporte_vinculos(
+    origen: Optional[str] = Query(None, description="Mismo filtro que el listado."),
+    consumidor: Optional[str] = Query(None),
+    desde: Optional[date] = Query(None),
+    hasta: Optional[date] = Query(None),
+    q: Optional[str] = Query(None),
+    quien: dict = Depends(verificar_api_key),
+):
+    """
+    El mismo listado, **sin paginar y como CSV descargable**.
+
+    Acepta exactamente los filtros de `GET /vinculos/` y respeta la misma
+    visibilidad: una clave de consumo exporta solo lo suyo.
+
+    Va en streaming y con cursor del lado del servidor: el reporte completo son más
+    de 23 000 filas y no se materializan ni en PostgreSQL ni aquí. Como contrapartida
+    de streamear, un fallo de base a mitad corta el archivo en vez de dar un 500 — la
+    cabecera ya se envió. Se nota: el CSV llega incompleto.
+
+    Lleva BOM porque el destino real es Excel, que sin él abre el archivo en la
+    codificación del sistema y parte los acentos de las unidades (`/Académico/...`).
+    """
+    consumidor = _validar_filtros(origen, consumidor, desde, hasta, quien)
+
+    def lineas():
+        memoria = io.StringIO()
+        escritor = csv.writer(memoria, lineterminator="\n")
+        memoria.write("﻿")
+        escritor.writerow(COLUMNAS_REPORTE)
+        try:
+            for fila in vinculos.exportar(origen=origen, consumidor=consumidor,
+                                          desde=desde, hasta=hasta, texto=q):
+                escritor.writerow(["" if fila.get(c) is None else fila[c]
+                                   for c in COLUMNAS_REPORTE])
+                # Se entrega por bloques de ~64 KB: fila a fila serían miles de
+                # trozos HTTP para un archivo de un par de megas.
+                if memoria.tell() >= 65536:
+                    yield memoria.getvalue()
+                    memoria.seek(0)
+                    memoria.truncate(0)
+        except Exception:
+            logger.exception("El reporte de vínculos se cortó a mitad de la exportación.")
+            raise
+        yield memoria.getvalue()
+
+    nombre = f"correos_{date.today().isoformat()}.csv"
+    return StreamingResponse(
+        lineas(), media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{nombre}"'})
+
+
+@api.get("/google-services/vinculos/resumen", response_model=RespuestaResumenVinculos,
+         dependencies=[limite_lectura])
+def resumen_vinculos(
+    dias: int = Query(30, ge=1, le=365,
+                      description="Ventana de días para el desglose diario."),
+):
+    """
+    Avance de la migración en cifras: por dónde entró cada cuenta, ritmo de altas y
+    filas sospechosas.
+
+    Es la versión ampliada de `/vinculos/estado`: además del recuento por consumidor
+    separa por `origen` (cuántas creó la API de verdad frente a las que solo adoptó o
+    sembró el backfill), da las altas por día y señala las filas con defectos de
+    forma.
+
+    `anomalias` son defectos **de forma**, los únicos que se pueden ver desde la base:
+    correo vacío, correo de otro dominio, cuenta sin `google_id`, cédula no numérica y
+    correos repetidos. Una lista vacía significa que no hay nada que revisar. Que una
+    cuenta exista de verdad en Google es otra pregunta y la responde `/confirmar`.
+    """
+    try:
+        r = vinculos.resumen(dias=dias, dominio=settings.GOOGLE_DOMINIO)
+    except Exception as e:
+        raise _traducir(e)
+
+    creadas = sum(f["cuentas"] for f in r["por_origen"] if f["origen"] == "creacion")
+    return RespuestaResumenVinculos(
+        result=True,
+        message=(f"{r['vinculos']} vínculo(s) de {r['personas']} persona(s); "
+                 f"{creadas} cuenta(s) creadas por la API. "
+                 f"{len(r['anomalias'])} tipo(s) de anomalía."),
+        vinculos=r["vinculos"], personas=r["personas"],
+        por_origen=r["por_origen"], por_dia=r["por_dia"], anomalias=r["anomalias"])
 
 
 # --------------------------------------------------------------------------- #

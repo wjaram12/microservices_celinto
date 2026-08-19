@@ -344,6 +344,47 @@ class RespuestaEstadoVinculos(BaseModel):
     por_consumidor: List[dict] = []
 
 
+class RespuestaListaVinculos(BaseModel):
+    """Listado paginado del índice de vínculos.
+
+    Sale de PostgreSQL: dice qué se registró, cuándo y quién lo registró. NO prueba
+    que la cuenta siga viva en Google — para eso está `/personas/{cedula}/confirmar`.
+    """
+    result: bool
+    message: str
+    status: Literal["encontrado", "vacio"] = Field(
+        description="'vacio' es una consulta válida sin resultados, no un error.")
+    total: int = Field(0, description="Cuántas cumplen el filtro SIN paginar.")
+    limite: int = 0
+    desplazamiento: int = 0
+    filtros: dict = Field(
+        default={}, description="Los filtros realmente aplicados. Incluye `consumidor` "
+                                "aunque no se haya enviado: una clave de consumo solo "
+                                "ve lo suyo y aquí se ve que se acotó.")
+    cuentas: List[dict] = Field(
+        default=[], description="Las filas de la página, de la más reciente a la más "
+                                "antigua.")
+
+
+class RespuestaResumenVinculos(BaseModel):
+    """Cifras agregadas de la migración. Solo lee el índice local."""
+    result: bool
+    message: str
+    vinculos: int = 0
+    personas: int = 0
+    por_origen: List[dict] = Field(
+        default=[], description="Cuentas y personas por (origen, consumidor), con la "
+                                "primera y la última fecha. `origen='creacion'` son "
+                                "las cuentas que la API creó en Google.")
+    por_dia: List[dict] = Field(
+        default=[], description="Altas por día dentro de la ventana pedida.")
+    anomalias: List[dict] = Field(
+        default=[], description="Defectos de FORMA detectables desde la base (correo "
+                                "vacío, dominio ajeno, cédula no numérica, correo "
+                                "repetido), con hasta cinco ejemplos. Lista vacía = "
+                                "nada que revisar.")
+
+
 class RespuestaMiembro(BaseModel):
     result: bool
     message: str

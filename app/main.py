@@ -24,8 +24,8 @@ from app.services.procesadores import procesadores
 from app.services.prompts import prompts
 from app.services.rutas import rutas
 from app.views import (
-    adm_cache, adm_consultas, adm_consumidores, adm_procesadores, adm_prompts,
-    adm_rutas, documentos,
+    adm_cache, adm_consultas, adm_consumidores, adm_correos, adm_procesadores,
+    adm_prompts, adm_rutas, documentos,
 )
 
 logger = logging.getLogger(__name__)
@@ -106,7 +106,10 @@ if _consulta_titulos_ok:
 if _google_services_ok:
     app.include_router(google_services_api, prefix="/api/v1")
 
-for view in (adm_procesadores, adm_rutas, adm_consumidores, adm_consultas):
+# La página de correos se monta SIEMPRE, aunque el router de Google Workspace no
+# haya cargado: su enlace está fijo en la nav de base.html, y una página que explica
+# el error de la API es mejor que un 404 sin motivo.
+for view in (adm_procesadores, adm_rutas, adm_consumidores, adm_correos, adm_consultas):
     app.include_router(view.paginas)
 
 app.mount("/static", StaticFiles(directory=Path(__file__).resolve().parent / "static"), name="static")
